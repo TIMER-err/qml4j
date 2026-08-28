@@ -3,6 +3,8 @@ package io.github.timer_err.qml4j.render;
 import io.github.humbleui.skija.BlendMode;
 import io.github.humbleui.skija.Canvas;
 import io.github.humbleui.skija.ColorFilter;
+import io.github.humbleui.skija.ColorMatrix;
+import io.github.humbleui.skija.FilterTileMode;
 import io.github.humbleui.skija.Font;
 import io.github.humbleui.skija.impl.Native;
 import io.github.humbleui.skija.FontMetrics;
@@ -927,8 +929,14 @@ public final class Painter {
         return PaintStrokeJoin.BEVEL;
     }
 
-    // MultiEffect: paint the source subtree, optionally masked. The source is
-    // normally an invisible sibling, so we draw it through the renderer here.
+    // MultiEffect: blur -> colour grade -> shadow -> mask, in that order (verified
+    // against qtdeclarative's src/effects/data/shaders/multieffect.frag main(), which
+    // applies exactly these four stages in this order before the final `* qt_Opacity`).
+    // mask is therefore the OUTERMOST/last stage: it crops the fully-composited
+    // blur+grade+shadow result, not just the raw source -- a masked+shadowed effect's
+    // shadow is generated from the (blurred) source's own silhouette and can extend
+    // outside the mask's footprint, where the final mask step then cuts it off too.
+    // The source is normally an invisible sibling, drawn through the renderer here.
     public void drawMultiEffect(MultiEffect me, float w, float h, float alpha) {
         Object src = me.source.peek();
         if (!(src instanceof Item)) return;
@@ -937,54 +945,160 @@ public final class Painter {
         Object maskSrc = me.maskSource.peek();
         Item mask = Boolean.TRUE.equals(me.maskEnabled.peek()) && maskSrc instanceof Item ? (Item) maskSrc : null;
 
-        // Drop shadow: render the (optionally masked) source through a drop-shadow
-        // image filter, so a masked shape's shadow follows its actual masked
-        // silhouette -- matching Qt's single-pass shader, where mask is applied
-        // before the shadow is generated from the result -- not its full,
-        // pre-mask bounds.
-        if (Boolean.TRUE.equals(me.shadowEnabled.peek())) {
-            float op = (float) (alpha * me.shadowOpacity.peekDouble());
-            int sc = Renderer.applyAlpha(Renderer.parseColor(me.shadowColor.peek()), op);
-            float dy = me.shadowVerticalOffset.peekFloat();
-            float dx = me.shadowHorizontalOffset.peekFloat();
-            float sg = Renderer.sigma(me.shadowBlur.peekFloat() * 32f); // Qt blur is 0..1
-            Paint sp = new Paint();
-            sp.setImageFilter(ImageFilter.makeDropShadow(dx, dy, sg, sg, sc));
-            float mg = sg * 3f + Math.abs(dx) + Math.abs(dy) + 8f;
-            int save = canvas.saveLayer(Rect.makeXYWH(-mg, -mg, w + 2 * mg, h + 2 * mg), sp);
-            try {
-                if (mask != null) drawMaskedSource(source, mask, me, w, h, alpha);
-                else drawSourceAtEffectOrigin(source, alpha);
-            } finally { canvas.restoreToCount(save); sp.close(); }
-            return;
-        }
-
-        if (mask != null) {
-            drawMaskedSource(source, mask, me, w, h, alpha);
-            return;
-        }
-
-        int save = canvas.save();
-        try { drawSourceAtEffectOrigin(source, alpha); }
-        finally { canvas.restoreToCount(save); }
+        if (mask != null) drawMasked(me, source, mask, w, h, alpha);
+        else drawShadowed(me, source, w, h, alpha);
     }
 
-    // True per-pixel alpha masking: render the source into an offscreen layer, then
-    // composite the mask subtree's own rendered pixels onto it with DST_IN, which
-    // multiplies the destination's alpha by the source's alpha at every pixel -- so a
-    // mask painted with a gradient fades the source exactly where the gradient fades,
+    // Mask is the last stage: composite the (blur+grade+shadow) result into a layer,
+    // then multiply it by the mask subtree's own rendered alpha via DST_IN, which
+    // multiplies destination alpha by source alpha at every pixel -- so a mask painted
+    // with a gradient fades the composited result exactly where the gradient fades,
     // instead of only approximating a solid mask's outline as a clip.
-    private void drawMaskedSource(Item source, Item maskSource, MultiEffect me, float w, float h, float alpha) {
+    private void drawMasked(MultiEffect me, Item source, Item maskSource, float w, float h, float alpha) {
         Rect bounds = Rect.makeXYWH(0, 0, Math.max(0f, w), Math.max(0f, h));
         int save = canvas.saveLayer(bounds, null);
         try {
-            drawSourceAtEffectOrigin(source, alpha);
+            drawShadowed(me, source, w, h, alpha);
             try (Paint maskPaint = maskCompositePaint(me)) {
                 int maskSave = canvas.saveLayer(bounds, maskPaint);
                 try { drawSourceAtEffectOrigin(maskSource, 1f); }
                 finally { canvas.restoreToCount(maskSave); }
             }
         } finally { canvas.restoreToCount(save); }
+    }
+
+    // Shadow wraps the blurred+colour-graded source: Qt mixes shadowColor behind the
+    // graded result using the source's own blurred alpha, shifted by the shadow
+    // offset -- ImageFilter.makeDropShadow is the direct Skia equivalent (blur the
+    // input's alpha, offset it, colour it, composite behind the original).
+    private void drawShadowed(MultiEffect me, Item source, float w, float h, float alpha) {
+        if (!Boolean.TRUE.equals(me.shadowEnabled.peek())) {
+            drawGraded(me, source, w, h, alpha);
+            return;
+        }
+        float op = (float) (alpha * me.shadowOpacity.peekDouble());
+        int sc = Renderer.applyAlpha(Renderer.parseColor(me.shadowColor.peek()), op);
+        float dy = me.shadowVerticalOffset.peekFloat();
+        float dx = me.shadowHorizontalOffset.peekFloat();
+        float sg = Renderer.sigma(me.shadowBlur.peekFloat() * 32f); // Qt blur is 0..1
+        Paint sp = new Paint();
+        sp.setImageFilter(ImageFilter.makeDropShadow(dx, dy, sg, sg, sc));
+        float mg = sg * 3f + Math.abs(dx) + Math.abs(dy) + 8f;
+        int save = canvas.saveLayer(Rect.makeXYWH(-mg, -mg, w + 2 * mg, h + 2 * mg), sp);
+        try { drawGraded(me, source, w, h, alpha); }
+        finally { canvas.restoreToCount(save); sp.close(); }
+    }
+
+    // Colour grading (contrast/brightness/colorize/saturation) wraps the blurred
+    // source with an exact port of Qt's per-pixel formula (see colorGradingMatrix),
+    // so it grades the blur, not the sharp source underneath it.
+    private void drawGraded(MultiEffect me, Item source, float w, float h, float alpha) {
+        float[] matrix = colorGradingMatrix(me);
+        if (matrix == null) {
+            drawBlurred(me, source, w, h, alpha);
+            return;
+        }
+        try (Paint gp = new Paint().setColorFilter(ColorFilter.makeMatrix(new ColorMatrix(matrix)))) {
+            int save = canvas.saveLayer(Rect.makeXYWH(0, 0, Math.max(0f, w), Math.max(0f, h)), gp);
+            try { drawBlurred(me, source, w, h, alpha); }
+            finally { canvas.restoreToCount(save); }
+        }
+    }
+
+    // Blur is a real Gaussian (ImageFilter.makeBlur), not Qt's cheaper multi-level
+    // downsample-and-blend mip approximation (see MultiEffect for the property-
+    // semantics note) -- same visual knobs, a higher-quality primitive underneath.
+    private void drawBlurred(MultiEffect me, Item source, float w, float h, float alpha) {
+        float sigma = Boolean.TRUE.equals(me.blurEnabled.peek()) ? blurSigma(me) : 0f;
+        if (sigma <= 0f) {
+            int save = canvas.save();
+            try { drawSourceAtEffectOrigin(source, alpha); }
+            finally { canvas.restoreToCount(save); }
+            return;
+        }
+        try (Paint bp = new Paint().setImageFilter(ImageFilter.makeBlur(sigma, sigma, FilterTileMode.DECAL))) {
+            float mg = sigma * 3f + 4f;
+            int save = canvas.saveLayer(Rect.makeXYWH(-mg, -mg, w + 2 * mg, h + 2 * mg), bp);
+            try { drawSourceAtEffectOrigin(source, alpha); }
+            finally { canvas.restoreToCount(save); }
+        }
+    }
+
+    // blur (0..1, fraction of blurMax) and blurMultiplier (extends the radius further,
+    // at a quality cost in real Qt -- irrelevant here since makeBlur is already exact)
+    // combine into a pixel radius, matching Qt's parameter semantics if not its
+    // mip-chain algorithm.
+    private static float blurSigma(MultiEffect me) {
+        float blur = Math.max(0f, Math.min(1f, me.blur.peekFloat()));
+        float blurMax = Math.max(0f, me.blurMax.peekFloat());
+        float blurMultiplier = Math.max(0f, me.blurMultiplier.peekFloat());
+        return Renderer.sigma(blur * blurMax * (1f + blurMultiplier));
+    }
+
+    // Exact port of multieffect.frag's "contrast, brightness, saturation and
+    // colorization" block, converted from premultiplied- to unpremultiplied-alpha
+    // space (Skia's ColorMatrix operates unpremultiplied): the shader's alpha-scaled
+    // pivot/additive terms (`- 0.5*color.a`, `+= brightness*color.a`) reduce exactly to
+    // the classic alpha-independent formulas once divided through by alpha, so the
+    // whole pipeline becomes a single linear 3x3+offset transform on RGB:
+    //   contrast+brightness: c1 = rgb*(1+contrast) + (brightness - 0.5*contrast)
+    //   colorize:  gray = luma(c1) [Rec.601 weights, matching Qt's dot(.., vec3(0.299,0.587,0.114))]
+    //              c2 = mix(c1, gray*colorizationColor.rgb, effAlpha)
+    //              where effAlpha = clamp(colorizationColor.alpha * colorization, 0, 1)
+    //              (Qt folds `colorization` into colorizationColor.a on the CPU side)
+    //   saturation: out = mix(gray, c2, 1 + saturation) -- reuses the SAME gray as colorize,
+    //              not a re-luma of the colorized result
+    // Returns null (skip -- true identity) only when all four knobs are at Qt's
+    // defaults (0), the one case where this whole pipeline is provably a no-op.
+    private static float[] colorGradingMatrix(MultiEffect me) {
+        float contrast = me.contrast.peekFloat();
+        float brightness = me.brightness.peekFloat();
+        float saturation = me.saturation.peekFloat();
+        float colorization = me.colorization.peekFloat();
+        if (contrast == 0f && brightness == 0f && saturation == 0f && colorization == 0f) return null;
+
+        int cc = Renderer.parseColor(me.colorizationColor.peek());
+        float ccA = ((cc >>> 24) & 0xFF) / 255f;
+        float ccR = ((cc >>> 16) & 0xFF) / 255f;
+        float ccG = ((cc >>> 8) & 0xFF) / 255f;
+        float ccB = (cc & 0xFF) / 255f;
+        float effAlpha = Math.max(0f, Math.min(1f, ccA * colorization));
+        float ia = 1f - effAlpha;
+
+        float cb = 1f + contrast;
+        float add = brightness - 0.5f * contrast;
+
+        // Rec.601 luma weights.
+        float wr = 0.299f, wg = 0.587f, wb = 0.114f;
+
+        // colorize, as a matrix on c1: c2 = M2*c1, M2 = effAlpha*outer(cc,w) + ia*I
+        float[][] m2 = {
+            { effAlpha * ccR * wr + ia,  effAlpha * ccR * wg,         effAlpha * ccR * wb },
+            { effAlpha * ccG * wr,       effAlpha * ccG * wg + ia,    effAlpha * ccG * wb },
+            { effAlpha * ccB * wr,       effAlpha * ccB * wg,         effAlpha * ccB * wb + ia },
+        };
+
+        // saturation, folded in on c1: out = (1+sat)*c2 - sat*(w . c1) = [(1+sat)*M2 - sat*w] * c1
+        float sat1 = 1f + saturation;
+        float[][] m3 = new float[3][3];
+        for (int i = 0; i < 3; i++) {
+            m3[i][0] = sat1 * m2[i][0] - saturation * wr;
+            m3[i][1] = sat1 * m2[i][1] - saturation * wg;
+            m3[i][2] = sat1 * m2[i][2] - saturation * wb;
+        }
+
+        // fold in contrast+brightness (c1 = cb*rgb + add): total = m3*(cb*rgb + add) = (m3*cb)*rgb + (m3 row-sum)*add
+        float[] mat = new float[20];
+        for (int row = 0; row < 3; row++) {
+            float rowSum = m3[row][0] + m3[row][1] + m3[row][2];
+            mat[row * 5] = m3[row][0] * cb;
+            mat[row * 5 + 1] = m3[row][1] * cb;
+            mat[row * 5 + 2] = m3[row][2] * cb;
+            mat[row * 5 + 3] = 0f; // alpha input coefficient -- unpremultiplied formulas are alpha-independent
+            mat[row * 5 + 4] = rowSum * add;
+        }
+        mat[15] = 0f; mat[16] = 0f; mat[17] = 0f; mat[18] = 1f; mat[19] = 0f; // alpha row: identity
+        return mat;
     }
 
     // DST_IN keyed by the mask's raw alpha, remapped through Qt's threshold/spread

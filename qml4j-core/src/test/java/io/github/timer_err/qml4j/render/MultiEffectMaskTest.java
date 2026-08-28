@@ -190,32 +190,44 @@ class MultiEffectMaskTest {
         return (bmp.getColor(x, y) >> 16) & 0xFF;
     }
 
-    // source spans the full item (x:0..100); the mask is only a narrow strip (x:0..20).
-    // shadowHorizontalOffset shifts the shadow 50px right, blur kept small so the
-    // shadow's edges stay crisp enough to sample confidently.
-    private static final String SHADOWED_NARROW_MASK =
+    // Verified against qtdeclarative's multieffect.frag main(): the order is
+    // BLUR -> colour grade -> SHADOW -> MASK, with mask applied LAST to the whole
+    // composited (shadow-included) result -- not shadow generated from an
+    // already-masked source. source (x:0..20) and the mask's own footprint (x:50..70,
+    // via a wrapper Item whose CHILD Rectangle is positioned -- Painter's
+    // drawSourceAtEffectOrigin neutralises maskSource's OWN x/y so it draws at the
+    // effect's local (0,0), but a child's x/y within that subtree is respected
+    // normally) don't overlap at all. shadowHorizontalOffset:50 shifts the shadow
+    // generated from the UNMASKED source into exactly the mask's footprint. Under the
+    // correct order the shadow (grown from the raw source, independent of the mask)
+    // survives the final mask crop and becomes visible, while the source's own opaque
+    // pixels -- outside the mask's footprint -- get cropped away entirely. Under the
+    // wrong order (mask applied before shadow, as an earlier version of this code
+    // did) the mask would erase the source first, leaving nothing for the shadow to
+    // be generated from -- the whole image would render blank.
+    private static final String SHADOW_FROM_UNMASKED_SOURCE_INTO_DISJOINT_MASK =
         "import QtQuick\n"
         + "import QtQuick.Effects\n"
         + "Item { width: 100; height: 20\n"
-        + "  Rectangle { id: src; anchors.fill: parent; color: \"#ffffff\"; visible: false }\n"
-        + "  Rectangle { id: msk; x: 0; y: 0; width: 20; height: 20; color: \"#ffffff\"; visible: false }\n"
+        + "  Rectangle { id: src; x: 0; y: 0; width: 20; height: 20; color: \"#ffffff\"; visible: false }\n"
+        + "  Item { id: msk; visible: false\n"
+        + "    Rectangle { x: 50; y: 0; width: 20; height: 20; color: \"#ffffff\" }\n"
+        + "  }\n"
         + "  MultiEffect { anchors.fill: parent; source: src; maskEnabled: true; maskSource: msk\n"
         + "    shadowEnabled: true; shadowColor: \"#ff0000\"; shadowOpacity: 1\n"
         + "    shadowHorizontalOffset: 50; shadowBlur: 0.05 }\n"
         + "}";
 
     @Test
-    void shadowFollowsTheMaskedSilhouetteNotTheFullUnmaskedSource() {
-        Bitmap bmp = render(SHADOWED_NARROW_MASK, 100, 20);
+    void shadowIsGeneratedFromTheUnmaskedSourceThenTheWholeResultIsMasked() {
+        Bitmap bmp = render(SHADOW_FROM_UNMASKED_SOURCE_INTO_DISJOINT_MASK, 100, 20);
         try {
-            // The masked strip (x:0..20) is 20px wide, so its shadow -- shifted 50px
-            // right -- lands around x:50..70. If the shadow were wrongly generated from
-            // the full 100px-wide source instead of the masked 20px strip, it would
-            // extend all the way to x:100, lighting up x=90 too.
             assertTrue(redAt(bmp, 60, 10) > 150,
-                "the masked strip's shadow must appear where the strip itself, shifted, would land");
-            assertTrue(redAt(bmp, 90, 10) < 30,
-                "the shadow must not extend to where only the FULL unmasked source's shadow would reach");
+                "the shadow, generated from the unmasked source and shifted into the mask's footprint, "
+                + "must survive the final mask crop");
+            assertTrue(brightnessAt(bmp, 10, 10) < 10,
+                "the source's own pixels, outside the mask's footprint, must be cropped away by the "
+                + "final mask step even though the source itself was never masked when its shadow was generated");
         } finally {
             bmp.close();
         }
