@@ -614,7 +614,7 @@ public final class Renderer {
     }
 
     // Draw a node ignoring its own `visible` flag (used to render a MultiEffect
-    // source, which is normally an invisible sibling rendered only via the effect).
+    // source or mask, both normally invisible siblings rendered only via the effect).
     void drawForced(Canvas canvas, Item node, float inheritedAlpha) {
         // (Layout is done once in settleLayout; no per-node re-measure in draw.)
         float x = node.x.peekFloat();

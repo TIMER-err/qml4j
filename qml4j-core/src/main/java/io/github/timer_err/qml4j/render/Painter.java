@@ -1,5 +1,6 @@
 package io.github.timer_err.qml4j.render;
 
+import io.github.humbleui.skija.BlendMode;
 import io.github.humbleui.skija.Canvas;
 import io.github.humbleui.skija.Font;
 import io.github.humbleui.skija.impl.Native;
@@ -25,7 +26,6 @@ import io.github.timer_err.qml4j.render.items.core.Gradient;
 import io.github.timer_err.qml4j.render.items.core.GradientStop;
 import io.github.timer_err.qml4j.render.items.core.Image;
 import io.github.timer_err.qml4j.render.items.core.Item;
-import io.github.timer_err.qml4j.render.items.core.Rectangle;
 import io.github.timer_err.qml4j.render.items.core.Text;
 import io.github.timer_err.qml4j.render.items.core.TextWrap;
 import io.github.timer_err.qml4j.render.items.effect.MultiEffect;
@@ -926,8 +926,7 @@ public final class Painter {
         return PaintStrokeJoin.BEVEL;
     }
 
-    // v0 MultiEffect: paint the source subtree clipped to the mask's rounded-rect
-    // shape (true per-pixel alpha masking is not implemented). The source is
+    // MultiEffect: paint the source subtree, optionally masked. The source is
     // normally an invisible sibling, so we draw it through the renderer here.
     public void drawMultiEffect(MultiEffect me, float w, float h, float alpha) {
         Object src = me.source.peek();
@@ -950,24 +949,33 @@ public final class Painter {
             return;
         }
 
-        // Mask: clip the source to the mask's rounded-rect shape (v0 approximation).
-        int save = canvas.save();
-        if (Boolean.TRUE.equals(me.maskEnabled.peek())) {
-            Rectangle mr = maskRect(me.maskSource.peek());
-            float tl = mr == null ? 0f : mr.cornerRadius(mr.topLeftRadius.peekFloat());
-            float tr = mr == null ? 0f : mr.cornerRadius(mr.topRightRadius.peekFloat());
-            float br = mr == null ? 0f : mr.cornerRadius(mr.bottomRightRadius.peekFloat());
-            float bl = mr == null ? 0f : mr.cornerRadius(mr.bottomLeftRadius.peekFloat());
-            if (tl > 0 || tr > 0 || br > 0 || bl > 0) {
-                // Per-corner: a first/last SegmentedButton segment is round on one side,
-                // square on the other -- a single radius clipped the ripple as a rect.
-                canvas.clipRRect(RRect.makeComplexXYWH(0, 0, w, h, new float[]{tl, tr, br, bl}));
-            } else {
-                canvas.clipRect(Rect.makeXYWH(0, 0, w, h));
-            }
+        Object maskSrc = me.maskSource.peek();
+        if (Boolean.TRUE.equals(me.maskEnabled.peek()) && maskSrc instanceof Item) {
+            drawMaskedSource(source, (Item) maskSrc, Boolean.TRUE.equals(me.maskInverted.peek()), w, h, alpha);
+            return;
         }
+
+        int save = canvas.save();
         try { drawSourceAtEffectOrigin(source, alpha); }
         finally { canvas.restoreToCount(save); }
+    }
+
+    // True per-pixel alpha masking: render the source into an offscreen layer, then
+    // composite the mask subtree's own rendered pixels onto it with DST_IN (or DST_OUT
+    // when inverted). DST_IN multiplies the destination's alpha by the source's alpha at
+    // every pixel -- so a mask painted with a gradient fades the source exactly where the
+    // gradient fades, instead of only approximating a solid mask's outline as a clip.
+    private void drawMaskedSource(Item source, Item maskSource, boolean inverted, float w, float h, float alpha) {
+        Rect bounds = Rect.makeXYWH(0, 0, Math.max(0f, w), Math.max(0f, h));
+        int save = canvas.saveLayer(bounds, null);
+        try {
+            drawSourceAtEffectOrigin(source, alpha);
+            try (Paint maskPaint = new Paint().setBlendMode(inverted ? BlendMode.DST_OUT : BlendMode.DST_IN)) {
+                int maskSave = canvas.saveLayer(bounds, maskPaint);
+                try { drawSourceAtEffectOrigin(maskSource, 1f); }
+                finally { canvas.restoreToCount(maskSave); }
+            }
+        } finally { canvas.restoreToCount(save); }
     }
 
     // The effect renders its source at the effect's own origin (the clip/mask is in
@@ -980,18 +988,6 @@ public final class Painter {
         canvas.translate(-source.x.peekFloat(), -source.y.peekFloat());
         try { renderer.drawForced(canvas, source, alpha); }
         finally { canvas.restoreToCount(s); }
-    }
-
-    // The first Rectangle in the mask subtree -- its effective per-corner radii
-    // define the clip shape.
-    private static Rectangle maskRect(Object maskSource) {
-        if (!(maskSource instanceof Item)) return null;
-        if (maskSource instanceof Rectangle) return (Rectangle) maskSource;
-        for (Item n : ((Item) maskSource).children) {
-            Rectangle r = maskRect(n);
-            if (r != null) return r;
-        }
-        return null;
     }
 
     private static final long CARET_BLINK_MS = 500;

@@ -4,16 +4,16 @@ import io.github.timer_err.qml4j.render.items.core.Item;
 import io.github.timer_err.qml4j.engine.binding.Property;
 import io.github.timer_err.qml4j.render.Painter;
 
-// QtQuick.Effects MultiEffect. v0 supports source + mask (maskEnabled/maskSource):
-// the source item is painted at the effect's geometry, clipped to the mask's
-// shape. Colour/blur/shadow knobs are accepted but not yet applied.
+// QtQuick.Effects MultiEffect. Supports source + mask (maskEnabled/maskSource/maskInverted):
+// the source item is painted at the effect's geometry, masked pixel-for-pixel by the mask
+// subtree's own rendered alpha (so a gradient mask fades the source, not just clips it).
+// Colour/blur/shadow knobs are accepted but not yet applied (shadow excepted).
 public class MultiEffect extends Item {
     public final Property<Object> source = new Property<>(null);
     @SuppressWarnings("unused")
     public final Property<Boolean> autoPaddingEnabled = new Property<>(Boolean.TRUE);
     public final Property<Boolean> maskEnabled = new Property<>(Boolean.FALSE);
     public final Property<Object> maskSource = new Property<>(null);
-    @SuppressWarnings("unused")
     public final Property<Boolean> maskInverted = new Property<>(Boolean.FALSE);
     @SuppressWarnings("unused")
     public final Property<Number> maskThresholdMin = new Property<>(0.0);
