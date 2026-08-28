@@ -934,7 +934,14 @@ public final class Painter {
         if (!(src instanceof Item)) return;
         Item source = (Item) src;
 
-        // Drop shadow: render the source through a drop-shadow image filter.
+        Object maskSrc = me.maskSource.peek();
+        Item mask = Boolean.TRUE.equals(me.maskEnabled.peek()) && maskSrc instanceof Item ? (Item) maskSrc : null;
+
+        // Drop shadow: render the (optionally masked) source through a drop-shadow
+        // image filter, so a masked shape's shadow follows its actual masked
+        // silhouette -- matching Qt's single-pass shader, where mask is applied
+        // before the shadow is generated from the result -- not its full,
+        // pre-mask bounds.
         if (Boolean.TRUE.equals(me.shadowEnabled.peek())) {
             float op = (float) (alpha * me.shadowOpacity.peekDouble());
             int sc = Renderer.applyAlpha(Renderer.parseColor(me.shadowColor.peek()), op);
@@ -945,14 +952,15 @@ public final class Painter {
             sp.setImageFilter(ImageFilter.makeDropShadow(dx, dy, sg, sg, sc));
             float mg = sg * 3f + Math.abs(dx) + Math.abs(dy) + 8f;
             int save = canvas.saveLayer(Rect.makeXYWH(-mg, -mg, w + 2 * mg, h + 2 * mg), sp);
-            try { drawSourceAtEffectOrigin(source, alpha); }
-            finally { canvas.restoreToCount(save); sp.close(); }
+            try {
+                if (mask != null) drawMaskedSource(source, mask, me, w, h, alpha);
+                else drawSourceAtEffectOrigin(source, alpha);
+            } finally { canvas.restoreToCount(save); sp.close(); }
             return;
         }
 
-        Object maskSrc = me.maskSource.peek();
-        if (Boolean.TRUE.equals(me.maskEnabled.peek()) && maskSrc instanceof Item) {
-            drawMaskedSource(source, (Item) maskSrc, me, w, h, alpha);
+        if (mask != null) {
+            drawMaskedSource(source, mask, me, w, h, alpha);
             return;
         }
 

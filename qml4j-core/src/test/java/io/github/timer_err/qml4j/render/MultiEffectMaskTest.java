@@ -185,4 +185,39 @@ class MultiEffectMaskTest {
             bmp.close();
         }
     }
+
+    private static int redAt(Bitmap bmp, int x, int y) {
+        return (bmp.getColor(x, y) >> 16) & 0xFF;
+    }
+
+    // source spans the full item (x:0..100); the mask is only a narrow strip (x:0..20).
+    // shadowHorizontalOffset shifts the shadow 50px right, blur kept small so the
+    // shadow's edges stay crisp enough to sample confidently.
+    private static final String SHADOWED_NARROW_MASK =
+        "import QtQuick\n"
+        + "import QtQuick.Effects\n"
+        + "Item { width: 100; height: 20\n"
+        + "  Rectangle { id: src; anchors.fill: parent; color: \"#ffffff\"; visible: false }\n"
+        + "  Rectangle { id: msk; x: 0; y: 0; width: 20; height: 20; color: \"#ffffff\"; visible: false }\n"
+        + "  MultiEffect { anchors.fill: parent; source: src; maskEnabled: true; maskSource: msk\n"
+        + "    shadowEnabled: true; shadowColor: \"#ff0000\"; shadowOpacity: 1\n"
+        + "    shadowHorizontalOffset: 50; shadowBlur: 0.05 }\n"
+        + "}";
+
+    @Test
+    void shadowFollowsTheMaskedSilhouetteNotTheFullUnmaskedSource() {
+        Bitmap bmp = render(SHADOWED_NARROW_MASK, 100, 20);
+        try {
+            // The masked strip (x:0..20) is 20px wide, so its shadow -- shifted 50px
+            // right -- lands around x:50..70. If the shadow were wrongly generated from
+            // the full 100px-wide source instead of the masked 20px strip, it would
+            // extend all the way to x:100, lighting up x=90 too.
+            assertTrue(redAt(bmp, 60, 10) > 150,
+                "the masked strip's shadow must appear where the strip itself, shifted, would land");
+            assertTrue(redAt(bmp, 90, 10) < 30,
+                "the shadow must not extend to where only the FULL unmasked source's shadow would reach");
+        } finally {
+            bmp.close();
+        }
+    }
 }
