@@ -15,13 +15,9 @@ public class MultiEffect extends Item {
     public final Property<Boolean> maskEnabled = new Property<>(Boolean.FALSE);
     public final Property<Object> maskSource = new Property<>(null);
     public final Property<Boolean> maskInverted = new Property<>(Boolean.FALSE);
-    @SuppressWarnings("unused")
     public final Property<Number> maskThresholdMin = new Property<>(0.0);
-    @SuppressWarnings("unused")
     public final Property<Number> maskThresholdMax = new Property<>(1.0);
-    @SuppressWarnings("unused")
     public final Property<Number> maskSpreadAtMin = new Property<>(0.0);
-    @SuppressWarnings("unused")
     public final Property<Number> maskSpreadAtMax = new Property<>(0.0);
 
     @SuppressWarnings("unused")

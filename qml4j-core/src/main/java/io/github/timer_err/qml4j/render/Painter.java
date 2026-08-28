@@ -2,6 +2,7 @@ package io.github.timer_err.qml4j.render;
 
 import io.github.humbleui.skija.BlendMode;
 import io.github.humbleui.skija.Canvas;
+import io.github.humbleui.skija.ColorFilter;
 import io.github.humbleui.skija.Font;
 import io.github.humbleui.skija.impl.Native;
 import io.github.humbleui.skija.FontMetrics;
@@ -951,7 +952,7 @@ public final class Painter {
 
         Object maskSrc = me.maskSource.peek();
         if (Boolean.TRUE.equals(me.maskEnabled.peek()) && maskSrc instanceof Item) {
-            drawMaskedSource(source, (Item) maskSrc, Boolean.TRUE.equals(me.maskInverted.peek()), w, h, alpha);
+            drawMaskedSource(source, (Item) maskSrc, me, w, h, alpha);
             return;
         }
 
@@ -961,21 +962,76 @@ public final class Painter {
     }
 
     // True per-pixel alpha masking: render the source into an offscreen layer, then
-    // composite the mask subtree's own rendered pixels onto it with DST_IN (or DST_OUT
-    // when inverted). DST_IN multiplies the destination's alpha by the source's alpha at
-    // every pixel -- so a mask painted with a gradient fades the source exactly where the
-    // gradient fades, instead of only approximating a solid mask's outline as a clip.
-    private void drawMaskedSource(Item source, Item maskSource, boolean inverted, float w, float h, float alpha) {
+    // composite the mask subtree's own rendered pixels onto it with DST_IN, which
+    // multiplies the destination's alpha by the source's alpha at every pixel -- so a
+    // mask painted with a gradient fades the source exactly where the gradient fades,
+    // instead of only approximating a solid mask's outline as a clip.
+    private void drawMaskedSource(Item source, Item maskSource, MultiEffect me, float w, float h, float alpha) {
         Rect bounds = Rect.makeXYWH(0, 0, Math.max(0f, w), Math.max(0f, h));
         int save = canvas.saveLayer(bounds, null);
         try {
             drawSourceAtEffectOrigin(source, alpha);
-            try (Paint maskPaint = new Paint().setBlendMode(inverted ? BlendMode.DST_OUT : BlendMode.DST_IN)) {
+            try (Paint maskPaint = maskCompositePaint(me)) {
                 int maskSave = canvas.saveLayer(bounds, maskPaint);
                 try { drawSourceAtEffectOrigin(maskSource, 1f); }
                 finally { canvas.restoreToCount(maskSave); }
             }
         } finally { canvas.restoreToCount(save); }
+    }
+
+    // DST_IN keyed by the mask's raw alpha, remapped through Qt's threshold/spread
+    // window via a table ColorFilter (a 256-entry alpha LUT; a runtime SkSL shader
+    // would need extra vetting across Skija's raster/GPU/Android backends). Always
+    // applied, including at the property defaults: those defaults (thresholdMin 0,
+    // thresholdMax 1, spread 0) are NOT a pass-through in Qt -- the two smoothstep
+    // windows collapse to razor-thin ramps pinned at alpha 0 and 1, so stock
+    // MultiEffect treats any non-zero mask alpha as fully visible (a near-binary
+    // silhouette test), not a proportional multiply. A smooth per-pixel fade needs
+    // the threshold moved off the 0/1 extremes and spread widened -- see
+    // MultiEffectMaskTest for a worked example.
+    private static Paint maskCompositePaint(MultiEffect me) {
+        Paint paint = new Paint().setBlendMode(BlendMode.DST_IN);
+        boolean inverted = Boolean.TRUE.equals(me.maskInverted.peek());
+        byte[] alphaTable = maskAlphaTable(
+            me.maskThresholdMin.peekFloat(), me.maskThresholdMax.peekFloat(),
+            me.maskSpreadAtMin.peekFloat(), me.maskSpreadAtMax.peekFloat(), inverted);
+        paint.setColorFilter(ColorFilter.makeTableARGB(alphaTable, null, null, null));
+        return paint;
+    }
+
+    // Port of QQuickMultiEffectPrivate::updateMaskThresholdSpread (qtdeclarative
+    // src/effects/qquickmultieffect.cpp) composed with the MASK block of
+    // multieffect.frag: two smoothstep windows -- one anchored at maskThresholdMin and
+    // widened toward 0 by maskSpreadAtMin, one anchored at maskThresholdMax and widened
+    // toward 1 by maskSpreadAtMax -- multiplied together, then flipped when inverted.
+    private static byte[] maskAlphaTable(float thresholdMin, float thresholdMax,
+                                          float spreadMin, float spreadMax, boolean inverted) {
+        final double c0 = 0.0001;
+        final double c1 = 1.0 - c0;
+        double mt1 = thresholdMin + c0;
+        double ms1 = spreadMin + 1.0;
+        double mt2 = c1 - thresholdMax;
+        double ms2 = spreadMax + 1.0;
+        double edge0Min = mt1 * ms1 - (ms1 - c1);
+        double edge1Min = mt1 * ms1;
+        double edge0Max = mt2 * ms2 - (ms2 - c1);
+        double edge1Max = mt2 * ms2;
+        byte[] table = new byte[256];
+        for (int i = 0; i < 256; i++) {
+            double a = i / 255.0;
+            double m1 = smoothstep(edge0Min, edge1Min, a);
+            double m2 = smoothstep(edge0Max, edge1Max, 1.0 - a);
+            double mm = m1 * m2;
+            double out = inverted ? 1.0 - mm : mm;
+            table[i] = (byte) Math.round(Math.max(0.0, Math.min(1.0, out)) * 255.0);
+        }
+        return table;
+    }
+
+    private static double smoothstep(double edge0, double edge1, double x) {
+        if (edge1 <= edge0) return x < edge0 ? 0.0 : 1.0;
+        double t = Math.max(0.0, Math.min(1.0, (x - edge0) / (edge1 - edge0)));
+        return t * t * (3.0 - 2.0 * t);
     }
 
     // The effect renders its source at the effect's own origin (the clip/mask is in
