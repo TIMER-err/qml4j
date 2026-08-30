@@ -5,6 +5,7 @@ import io.github.timer_err.qml4j.render.items.core.Item;
 import io.github.timer_err.qml4j.engine.DelegateFactory;
 import io.github.timer_err.qml4j.engine.DelegateHost;
 import io.github.timer_err.qml4j.engine.QObject;
+import io.github.timer_err.qml4j.engine.js.JsRuntime;
 
 import java.util.Map;
 
@@ -13,7 +14,7 @@ public class Component extends Item implements DelegateHost {
 
     @Override
     public void setDelegate(DelegateFactory factory) {
-        this.factory = factory;
+        this.factory = JsRuntime.bindFactory(factory);
     }
 
     public DelegateFactory factory() {

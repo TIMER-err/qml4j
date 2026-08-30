@@ -1,5 +1,6 @@
 package io.github.timer_err.qml4j.engine.js;
 
+import io.github.timer_err.qml4j.engine.DelegateFactory;
 import io.github.timer_err.qml4j.engine.classloader.ScriptCache;
 import org.mozilla.javascript.Context;
 import org.mozilla.javascript.ContextFactory;
@@ -105,6 +106,22 @@ public final class JsRuntime {
     public static Activation activate(Realm realm) {
         if (realm == null) throw new IllegalArgumentException("realm == null");
         return new Activation(realm);
+    }
+
+    /** Bind a generated QML delegate/component factory to the engine realm that
+     * created it. Delegates are often instantiated much later by Repeater,
+     * ListView, GridView, Loader, or Component.createObject, after Loader's
+     * initial realm activation has ended. Without this wrapper their QmlScope
+     * constructors attach to DEFAULT_REALM and lose the document's context
+     * properties (for example player/settings/hostWindow). */
+    public static DelegateFactory bindFactory(DelegateFactory factory) {
+        if (factory == null) return null;
+        Realm realm = currentRealm();
+        return (index, modelData, parent) -> {
+            try (Activation ignored = activate(realm)) {
+                return factory.create(index, modelData, parent);
+            }
+        };
     }
 
     public static Context enter() {

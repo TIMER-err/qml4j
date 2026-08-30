@@ -7,6 +7,7 @@ import io.github.timer_err.qml4j.engine.DelegateHost;
 import io.github.timer_err.qml4j.engine.QObject;
 import io.github.timer_err.qml4j.engine.SignalHandler;
 import io.github.timer_err.qml4j.engine.binding.Property;
+import io.github.timer_err.qml4j.engine.js.JsRuntime;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -35,7 +36,7 @@ public class GridView extends Flickable implements DelegateHost {
 
     @Override
     public void setDelegate(DelegateFactory factory) {
-        this.factory = factory;
+        this.factory = JsRuntime.bindFactory(factory);
         rebuild();
     }
 
