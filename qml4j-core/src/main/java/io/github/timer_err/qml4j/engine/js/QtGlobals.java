@@ -208,7 +208,8 @@ public final class QtGlobals {
         "AlignLeft", 1L, "AlignRight", 2L, "AlignHCenter", 4L, "AlignJustify", 8L,
         "AlignTop", 32L, "AlignBottom", 64L, "AlignVCenter", 128L,
         "NoWrap", 0L, "WordWrap", 1L, "WrapAnywhere", 3L, "Wrap", 4L,
-        "ElideNone", 0L, "ElideLeft", 1L, "ElideMiddle", 2L, "ElideRight", 3L);
+        "ElideNone", 0L, "ElideLeft", 1L, "ElideMiddle", 2L, "ElideRight", 3L,
+        "Normal", 0L, "Outline", 1L, "Raised", 2L, "Sunken", 3L);
 
     private static final Map<String, Long> FONT = map(
         "Thin", 0L, "ExtraLight", 12L, "Light", 25L, "Normal", 50L, "Medium", 57L,
