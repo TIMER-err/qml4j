@@ -29,7 +29,7 @@ public final class RhinoBinding extends Binding {
     @Override
     @SuppressWarnings("deprecation") // Script.exec is the compiled-script entry point in Rhino 1.9
     public Object evaluate() {
-        Context cx = JsRuntime.enter();
+        Context cx = JsRuntime.enter(scope);
         try {
             return JsWrap.toJava(script.exec(cx, scope));
         } catch (EcmaError e) {
@@ -40,7 +40,7 @@ public final class RhinoBinding extends Binding {
             // with child==null still subscribes to `child` and recomputes on set.
             return null;
         } finally {
-            Context.exit();
+            JsRuntime.exit();
         }
     }
 }

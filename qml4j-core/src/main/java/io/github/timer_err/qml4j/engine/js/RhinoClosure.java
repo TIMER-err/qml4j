@@ -46,7 +46,7 @@ public final class RhinoClosure {
 
     @SuppressWarnings("deprecation") // Script.exec is the compiled-script entry point in Rhino 1.9
     public Object invoke(Object[] args) {
-        Context cx = JsRuntime.enter();
+        Context cx = JsRuntime.enter(scope);
         try {
             Function f = fn;
             if (f == null) {
@@ -59,7 +59,7 @@ public final class RhinoClosure {
         } catch (EcmaError e) {
             return null;
         } finally {
-            Context.exit();
+            JsRuntime.exit();
         }
     }
 }

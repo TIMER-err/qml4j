@@ -1,6 +1,8 @@
 package io.github.timer_err.qml4j.render;
 
 import io.github.timer_err.qml4j.compiler.CompiledUnit;
+import io.github.timer_err.qml4j.compiler.CompiledScene;
+import io.github.timer_err.qml4j.compiler.CompiledSceneCache;
 import io.github.timer_err.qml4j.compiler.TypeRegistry;
 import io.github.timer_err.qml4j.compiler.bytecode.CompileScope;
 import io.github.timer_err.qml4j.compiler.bytecode.QmlCompiler;
@@ -43,6 +45,10 @@ final class Loader implements ComponentFactory {
     private final Map<String, Map<String, QmldirEntry>> qmldirCache = new HashMap<>();
     private final Set<String> compilingNow = new HashSet<>();
     private ResourceLoader resources;
+    private CompiledSceneCache compilationCache;
+    private String compilationCacheKey;
+    private boolean initialLoad = true;
+    private CompilationRecorder recorder;
     // Fired as each compound (file-based) component is compiled+defined during
     // load, so a host can drive a splash/progress UI; compiling+dexing the QML
     // tree on first launch is the slow part on Android.
@@ -62,6 +68,11 @@ final class Loader implements ComponentFactory {
         this.progress = l;
     }
 
+    void setCompilationCache(CompiledSceneCache cache, String key) {
+        this.compilationCache = cache;
+        this.compilationCacheKey = key;
+    }
+
     @SuppressWarnings("unused")
     Item instantiate(String qml) {
         return instantiate(qml, "");
@@ -70,8 +81,73 @@ final class Loader implements ComponentFactory {
     // baseDir is the importing document's directory (relative to the resource root);
     // relative file imports (import "../widgets") resolve against it.
     Item instantiate(String qml, String baseDir) {
+        try (JsRuntime.Activation ignored = JsRuntime.activate(engine.jsRealm())) {
+            if (initialLoad) {
+                initialLoad = false;
+                return instantiateInitial(qml, baseDir);
+            }
+            return compileRoot(qml, baseDir);
+        }
+    }
+
+    private Item instantiateInitial(String qml, String baseDir) {
+        if (compilationCache == null || compilationCacheKey == null) {
+            return compileRoot(qml, baseDir);
+        }
+        CompiledScene cached = compilationCache.load(compilationCacheKey);
+        if (cached != null) return newRoot(restore(cached));
+        recorder = new CompilationRecorder();
+        try {
+            Ast.QmlDocument doc = Qml4j.parse(qml);
+            Class<? extends QObject> rootClass = compileAndDefine(doc, baseDir);
+            compilationCache.store(compilationCacheKey, recorder.finish(rootClass));
+            return newRoot(rootClass);
+        } finally {
+            recorder = null;
+        }
+    }
+
+    private Item compileRoot(String qml, String baseDir) {
         Ast.QmlDocument doc = Qml4j.parse(qml);
         return newRoot(compileAndDefine(doc, baseDir));
+    }
+
+    private Class<? extends QObject> restore(CompiledScene scene) {
+        for (CompiledScene.JsImport jsImport : scene.jsImports()) {
+            evaluateJsImport(jsImport.alias(), jsImport.path());
+        }
+        Map<String, Class<?>> defined = engine.backend().defineClasses(scene.classes());
+        restoreImportedTypes(scene, defined);
+        restoreSingletons(scene, defined);
+        return requireQObjectClass(defined, scene.rootClassName());
+    }
+
+    private void restoreImportedTypes(CompiledScene scene, Map<String, Class<?>> defined) {
+        for (Map.Entry<String, String> entry : scene.importedTypes().entrySet()) {
+            importedTypes.put(entry.getKey(), requireQObjectClass(defined, entry.getValue()));
+        }
+    }
+
+    private void restoreSingletons(CompiledScene scene, Map<String, Class<?>> defined) {
+        for (Map.Entry<String, Map<String, String>> prefix : scene.singletons().entrySet()) {
+            Map<String, Class<? extends QObject>> restored = new HashMap<>();
+            for (Map.Entry<String, String> entry : prefix.getValue().entrySet()) {
+                restored.put(entry.getKey(), requireQObjectClass(defined, entry.getValue()));
+            }
+            singletonsByPrefix.put(prefix.getKey(), restored);
+        }
+    }
+
+    private static Class<? extends QObject> requireQObjectClass(
+            Map<String, Class<?>> defined, String className) {
+        Class<?> type = defined.get(className);
+        if (type == null) throw new IllegalStateException("compiled scene missing class " + className);
+        if (!QObject.class.isAssignableFrom(type)) {
+            throw new IllegalStateException("compiled scene class is not a QObject: " + className);
+        }
+        @SuppressWarnings("unchecked")
+        Class<? extends QObject> qobjectType = (Class<? extends QObject>) type;
+        return qobjectType;
     }
 
     @Override
@@ -155,26 +231,20 @@ final class Loader implements ComponentFactory {
         registerKnownSingletons(docTypes, prefixes);
         defineInlineComponents(doc, docTypes, baseDir);
         CompiledUnit unit = compiler.compile(doc, docTypes, baseDir);
+        return defineUnit(unit);
+    }
+
+    private Class<? extends QObject> defineUnit(CompiledUnit unit) {
+        if (recorder != null) recorder.recordUnit(unit);
         ClassLoaderBackend backend = engine.backend();
         Map<String, Class<?>> defined = backend.defineClasses(unit.classes());
-        Class<?> rootClass = defined.get(unit.rootClassName());
-        if (rootClass == null) {
-            throw new IllegalStateException("compiled unit missing root class");
-        }
-        if (!QObject.class.isAssignableFrom(rootClass)) {
-            throw new IllegalStateException(
-                "compiled root class is not a QObject: " + rootClass.getName());
-        }
-        @SuppressWarnings("unchecked")
-        Class<? extends QObject> qc = (Class<? extends QObject>) rootClass;
-        return qc;
+        return requireQObjectClass(defined, unit.rootClassName());
     }
 
     // `component Name: Base { ... }`: compile each inline component into its own class and
     // register it as a document-level type so any object can instantiate `Name { }`. They
     // are document-scoped in Qt regardless of where they nest (ColorPage declares them
     // inside a Flickable) and may reference the file's root-level ids/properties.
-    @SuppressWarnings("unchecked")
     private void defineInlineComponents(Ast.QmlDocument doc, TypeRegistry docTypes, String baseDir) {
         List<Ast.InlineComponent> inlines = new ArrayList<>();
         collectInlineDecls(doc.root, inlines);
@@ -197,8 +267,7 @@ final class Loader implements ComponentFactory {
         for (Ast.InlineComponent ic : inlines) {
             CompiledUnit unit = compiler.compile(
                 new Ast.QmlDocument(doc.imports, ic.body), docTypes, sceneIds, baseDir);
-            Map<String, Class<?>> defined = engine.backend().defineClasses(unit.classes());
-            docTypes.register(ic.name, (Class<? extends QObject>) defined.get(unit.rootClassName()));
+            docTypes.register(ic.name, defineUnit(unit));
         }
     }
 
@@ -249,9 +318,11 @@ final class Loader implements ComponentFactory {
                 // resolve against it.
                 Class<? extends QObject> rootClass = compileAndDefine(subDoc, p);
                 importedTypes.put(path, rootClass);
+                if (recorder != null) recorder.recordImportedType(path, rootClass);
                 if (progress != null) progress.onComponentCompiled(name, ++compiledCount);
                 if (singleton) {
                     singletonsByPrefix.computeIfAbsent(p, k -> new HashMap<>()).put(name, rootClass);
+                    if (recorder != null) recorder.recordSingleton(p, name, rootClass);
                     TypeRegistry current = CompileScope.currentRegistry();
                     if (current != null) current.registerSingleton(name, rootClass);
                 }
@@ -332,14 +403,17 @@ final class Loader implements ComponentFactory {
         for (Ast.ImportNode imp : doc.imports) {
             if (!isJsImport(imp) || imp.alias == null) continue;
             String path = resolveJsPath(imp.moduleOrPath, baseDir);
-            byte[] bytes = resources != null ? resources.load(path) : null;
-            if (bytes == null) {
-                throw new IllegalArgumentException("JS import not found: " + imp.moduleOrPath);
-            }
-            Scriptable ns = JsRuntime.evalModule(new String(bytes, StandardCharsets.UTF_8));
-            JsRuntime.putGlobal(imp.alias, ns);
-            RhinoScope.registerContextProperty(imp.alias);
+            evaluateJsImport(imp.alias, path);
+            if (recorder != null) recorder.recordJsImport(imp.alias, path);
         }
+    }
+
+    private void evaluateJsImport(String alias, String path) {
+        byte[] bytes = resources != null ? resources.load(path) : null;
+        if (bytes == null) throw new IllegalArgumentException("JS import not found: " + path);
+        Scriptable ns = JsRuntime.evalModule(new String(bytes, StandardCharsets.UTF_8));
+        JsRuntime.putGlobal(engine.jsRealm(), alias, ns);
+        RhinoScope.registerContextProperty(alias);
     }
 
     private static String resolveJsPath(String path, String baseDir) {

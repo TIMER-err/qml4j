@@ -1,6 +1,10 @@
 package io.github.timer_err.qml4j.render;
 
+import io.github.humbleui.skija.BlendMode;
 import io.github.humbleui.skija.Canvas;
+import io.github.humbleui.skija.ColorFilter;
+import io.github.humbleui.skija.ColorMatrix;
+import io.github.humbleui.skija.FilterTileMode;
 import io.github.humbleui.skija.Font;
 import io.github.humbleui.skija.impl.Native;
 import io.github.humbleui.skija.FontMetrics;
@@ -25,7 +29,6 @@ import io.github.timer_err.qml4j.render.items.core.Gradient;
 import io.github.timer_err.qml4j.render.items.core.GradientStop;
 import io.github.timer_err.qml4j.render.items.core.Image;
 import io.github.timer_err.qml4j.render.items.core.Item;
-import io.github.timer_err.qml4j.render.items.core.Rectangle;
 import io.github.timer_err.qml4j.render.items.core.Text;
 import io.github.timer_err.qml4j.render.items.core.TextWrap;
 import io.github.timer_err.qml4j.render.items.effect.MultiEffect;
@@ -459,51 +462,95 @@ public final class Painter {
         drawTextLine(line, x, baseline, p);
     }
 
+    // Qt Text.Outline's default look is a fixed ~1px offset ring (see qquicktextnode.cpp);
+    // styleWidth <= 0 reproduces that same thickness via a real stroked pass instead.
+    private static final float DEFAULT_OUTLINE_WIDTH = 1f;
+    // Qt draws Raised/Sunken as a single styleColor copy shifted 1px down/up, underneath
+    // the normal-coloured text (qquicktextnode.cpp shiftForStyle).
+    private static final float RAISED_SUNKEN_OFFSET = 1f;
+
     // Multi-line text: optional wrap to boxW, optional right-elision, from y=0. Each line
     // is offset by hAlign (Text.AlignHCenter/AlignRight) within boxW, so a centred Text
-    // centres every wrapped line, not just the block.
-    public void drawWrappedText(String s, float boxW, int argb, float size,
-                                int wrapModeEnum, boolean elideRight, boolean bold, int hAlign,
-                                int maxLines) {
-        String wrapMode = TextLayout.wrapModeString(wrapModeEnum);
-        { Font font = renderer.fonts().fontFor(size, s, bold);
-            float baseline0 = TextLayout.baselineInLine(font);
-            Paint p = renderer.paint();
-            p.setMode(PaintMode.FILL);
-            p.setShader(null);
-            p.setColor(argb);
-            // Common path drawn every frame: no wrapping and no embedded newline -> a
-            // single line. Draw it directly; splitLines(s) would allocate a String[]
-            // per label per frame just to hold that one line.
-            boolean wrapping = wrapMode != null && boxW > 0f;
-            if (!wrapping && s.indexOf('\n') < 0) {
-                String line = elideRight ? elideRightToWidth(font, s, boxW) : s;
-                TextLine shaped = textLine(font, line);
-                drawTextLine(shaped, lineOffset(line, font, boxW, hAlign), baseline0, p);
-                return;
-            }
-            String[] lines = wrapping ? wrapLines(font, s, wrapMode, boxW) : TextLayout.splitLines(s);
-            // Clamp to maximumLineCount: draw only the first maxLines rows and mark the
-            // last kept row truncated so it gets a trailing ellipsis.
-            int drawCount = lines.length;
-            boolean truncated = false;
-            if (maxLines > 0 && drawCount > maxLines) {
-                drawCount = maxLines;
-                truncated = true;
-            }
-            float lineH = TextLayout.lineHeight(font);
-            for (int i = 0; i < drawCount; i++) {
-                if (lines[i].isEmpty()) continue;
-                String line;
-                if (truncated && i == drawCount - 1) {
-                    line = elideForceEllipsis(font, lines[i], boxW);
-                } else {
-                    line = elideRight ? elideRightToWidth(font, lines[i], boxW) : lines[i];
-                }
-                float tx = lineOffset(line, font, boxW, hAlign);
-                drawTextLine(textLine(font, line), tx, baseline0 + i * lineH, p);
-            }
+    // centres every wrapped line, not just the block. t.style selects Qt's Outline/Raised/
+    // Sunken text decoration, drawn under the normal fill pass.
+    public void drawWrappedText(Text t, String s, float boxW, float alpha) {
+        int argb = alphaColor(t.color.peek(), alpha);
+        float size = t.effectiveFontSize();
+        boolean elideRight = t.elide.peekInt() == 3; // Text.ElideRight
+        boolean bold = Boolean.TRUE.equals(t.font.bold.peek()) || t.font.weight.peekInt() >= 63;
+        int hAlign = t.horizontalAlignment.peekInt();
+        int maxLines = t.maximumLineCount.peekInt();
+        int style = t.style.peekInt();
+        int styleArgb = style == Text.STYLE_NORMAL ? 0 : alphaColor(t.styleColor.peek(), alpha);
+        float styleWidth = t.styleWidth.peekFloat();
+
+        String wrapMode = TextLayout.wrapModeString(t.wrapMode.peekInt());
+        Font font = renderer.fonts().fontFor(size, s, bold);
+        float baseline0 = TextLayout.baselineInLine(font);
+        Paint p = renderer.paint();
+        p.setShader(null);
+        // Common path drawn every frame: no wrapping and no embedded newline -> a
+        // single line. Draw it directly; splitLines(s) would allocate a String[]
+        // per label per frame just to hold that one line.
+        boolean wrapping = wrapMode != null && boxW > 0f;
+        if (!wrapping && s.indexOf('\n') < 0) {
+            String line = elideRight ? elideRightToWidth(font, s, boxW) : s;
+            TextLine shaped = textLine(font, line);
+            drawStyledGlyphLine(shaped, lineOffset(line, font, boxW, hAlign), baseline0,
+                                argb, style, styleArgb, styleWidth, p);
+            return;
         }
+        String[] lines = wrapping ? wrapLines(font, s, wrapMode, boxW) : TextLayout.splitLines(s);
+        // Clamp to maximumLineCount: draw only the first maxLines rows and mark the
+        // last kept row truncated so it gets a trailing ellipsis.
+        int drawCount = lines.length;
+        boolean truncated = false;
+        if (maxLines > 0 && drawCount > maxLines) {
+            drawCount = maxLines;
+            truncated = true;
+        }
+        float lineH = TextLayout.lineHeight(font);
+        for (int i = 0; i < drawCount; i++) {
+            if (lines[i].isEmpty()) continue;
+            String line;
+            if (truncated && i == drawCount - 1) {
+                line = elideForceEllipsis(font, lines[i], boxW);
+            } else {
+                line = elideRight ? elideRightToWidth(font, lines[i], boxW) : lines[i];
+            }
+            float tx = lineOffset(line, font, boxW, hAlign);
+            drawStyledGlyphLine(textLine(font, line), tx, baseline0 + i * lineH,
+                                argb, style, styleArgb, styleWidth, p);
+        }
+    }
+
+    // Draws one shaped line's Text.style decoration (Outline/Raised/Sunken), then the
+    // normal fill pass on top -- the decoration sits underneath so the fill reads cleanly.
+    private void drawStyledGlyphLine(TextLine line, float x, float y, int fillArgb,
+                                     int style, int styleArgb, float styleWidth, Paint p) {
+        switch (style) {
+            case Text.STYLE_OUTLINE:
+                p.setMode(PaintMode.STROKE);
+                p.setStrokeWidth(styleWidth > 0f ? styleWidth : DEFAULT_OUTLINE_WIDTH);
+                p.setColor(styleArgb);
+                drawTextLine(line, x, y, p);
+                break;
+            case Text.STYLE_RAISED:
+                p.setMode(PaintMode.FILL);
+                p.setColor(styleArgb);
+                drawTextLine(line, x, y + RAISED_SUNKEN_OFFSET, p);
+                break;
+            case Text.STYLE_SUNKEN:
+                p.setMode(PaintMode.FILL);
+                p.setColor(styleArgb);
+                drawTextLine(line, x, y - RAISED_SUNKEN_OFFSET, p);
+                break;
+            default:
+                break;
+        }
+        p.setMode(PaintMode.FILL);
+        p.setColor(fillArgb);
+        drawTextLine(line, x, y, p);
     }
 
     // The x offset placing a line within boxW per its horizontal alignment.
@@ -702,7 +749,7 @@ public final class Painter {
             node.loadedSource = src;
             long gen = ++node.decodeGen;
             node.status.set(2); // Loading
-            ImageLoader.decode(node, src, gen, renderer.resources());
+            ImageLoader.decode(node, src, gen, renderer.resources(), renderer.networkResourcePolicy());
         }
         if (node.decodeReadyGen == node.decodeGen && node.adoptedGen != node.decodeGen) {
             node.adoptedGen = node.decodeGen;
@@ -882,48 +929,231 @@ public final class Painter {
         return PaintStrokeJoin.BEVEL;
     }
 
-    // v0 MultiEffect: paint the source subtree clipped to the mask's rounded-rect
-    // shape (true per-pixel alpha masking is not implemented). The source is
-    // normally an invisible sibling, so we draw it through the renderer here.
+    // MultiEffect: blur -> colour grade -> shadow -> mask, in that order (verified
+    // against qtdeclarative's src/effects/data/shaders/multieffect.frag main(), which
+    // applies exactly these four stages in this order before the final `* qt_Opacity`).
+    // mask is therefore the OUTERMOST/last stage: it crops the fully-composited
+    // blur+grade+shadow result, not just the raw source -- a masked+shadowed effect's
+    // shadow is generated from the (blurred) source's own silhouette and can extend
+    // outside the mask's footprint, where the final mask step then cuts it off too.
+    // The source is normally an invisible sibling, drawn through the renderer here.
     public void drawMultiEffect(MultiEffect me, float w, float h, float alpha) {
         Object src = me.source.peek();
         if (!(src instanceof Item)) return;
         Item source = (Item) src;
 
-        // Drop shadow: render the source through a drop-shadow image filter.
-        if (Boolean.TRUE.equals(me.shadowEnabled.peek())) {
-            float op = (float) (alpha * me.shadowOpacity.peekDouble());
-            int sc = Renderer.applyAlpha(Renderer.parseColor(me.shadowColor.peek()), op);
-            float dy = me.shadowVerticalOffset.peekFloat();
-            float dx = me.shadowHorizontalOffset.peekFloat();
-            float sg = Renderer.sigma(me.shadowBlur.peekFloat() * 32f); // Qt blur is 0..1
-            Paint sp = new Paint();
-            sp.setImageFilter(ImageFilter.makeDropShadow(dx, dy, sg, sg, sc));
-            float mg = sg * 3f + Math.abs(dx) + Math.abs(dy) + 8f;
-            int save = canvas.saveLayer(Rect.makeXYWH(-mg, -mg, w + 2 * mg, h + 2 * mg), sp);
-            try { drawSourceAtEffectOrigin(source, alpha); }
-            finally { canvas.restoreToCount(save); sp.close(); }
+        Object maskSrc = me.maskSource.peek();
+        Item mask = Boolean.TRUE.equals(me.maskEnabled.peek()) && maskSrc instanceof Item ? (Item) maskSrc : null;
+
+        if (mask != null) drawMasked(me, source, mask, w, h, alpha);
+        else drawShadowed(me, source, w, h, alpha);
+    }
+
+    // Mask is the last stage: composite the (blur+grade+shadow) result into a layer,
+    // then multiply it by the mask subtree's own rendered alpha via DST_IN, which
+    // multiplies destination alpha by source alpha at every pixel -- so a mask painted
+    // with a gradient fades the composited result exactly where the gradient fades,
+    // instead of only approximating a solid mask's outline as a clip.
+    private void drawMasked(MultiEffect me, Item source, Item maskSource, float w, float h, float alpha) {
+        Rect bounds = Rect.makeXYWH(0, 0, Math.max(0f, w), Math.max(0f, h));
+        int save = canvas.saveLayer(bounds, null);
+        try {
+            drawShadowed(me, source, w, h, alpha);
+            try (Paint maskPaint = maskCompositePaint(me)) {
+                int maskSave = canvas.saveLayer(bounds, maskPaint);
+                try { drawSourceAtEffectOrigin(maskSource, 1f); }
+                finally { canvas.restoreToCount(maskSave); }
+            }
+        } finally { canvas.restoreToCount(save); }
+    }
+
+    // Shadow wraps the blurred+colour-graded source: Qt mixes shadowColor behind the
+    // graded result using the source's own blurred alpha, shifted by the shadow
+    // offset -- ImageFilter.makeDropShadow is the direct Skia equivalent (blur the
+    // input's alpha, offset it, colour it, composite behind the original).
+    private void drawShadowed(MultiEffect me, Item source, float w, float h, float alpha) {
+        if (!Boolean.TRUE.equals(me.shadowEnabled.peek())) {
+            drawGraded(me, source, w, h, alpha);
             return;
         }
+        float op = (float) (alpha * me.shadowOpacity.peekDouble());
+        int sc = Renderer.applyAlpha(Renderer.parseColor(me.shadowColor.peek()), op);
+        float dy = me.shadowVerticalOffset.peekFloat();
+        float dx = me.shadowHorizontalOffset.peekFloat();
+        float sg = Renderer.sigma(me.shadowBlur.peekFloat() * 32f); // Qt blur is 0..1
+        Paint sp = new Paint();
+        sp.setImageFilter(ImageFilter.makeDropShadow(dx, dy, sg, sg, sc));
+        float mg = sg * 3f + Math.abs(dx) + Math.abs(dy) + 8f;
+        int save = canvas.saveLayer(Rect.makeXYWH(-mg, -mg, w + 2 * mg, h + 2 * mg), sp);
+        try { drawGraded(me, source, w, h, alpha); }
+        finally { canvas.restoreToCount(save); sp.close(); }
+    }
 
-        // Mask: clip the source to the mask's rounded-rect shape (v0 approximation).
-        int save = canvas.save();
-        if (Boolean.TRUE.equals(me.maskEnabled.peek())) {
-            Rectangle mr = maskRect(me.maskSource.peek());
-            float tl = mr == null ? 0f : mr.cornerRadius(mr.topLeftRadius.peekFloat());
-            float tr = mr == null ? 0f : mr.cornerRadius(mr.topRightRadius.peekFloat());
-            float br = mr == null ? 0f : mr.cornerRadius(mr.bottomRightRadius.peekFloat());
-            float bl = mr == null ? 0f : mr.cornerRadius(mr.bottomLeftRadius.peekFloat());
-            if (tl > 0 || tr > 0 || br > 0 || bl > 0) {
-                // Per-corner: a first/last SegmentedButton segment is round on one side,
-                // square on the other -- a single radius clipped the ripple as a rect.
-                canvas.clipRRect(RRect.makeComplexXYWH(0, 0, w, h, new float[]{tl, tr, br, bl}));
-            } else {
-                canvas.clipRect(Rect.makeXYWH(0, 0, w, h));
-            }
+    // Colour grading (contrast/brightness/colorize/saturation) wraps the blurred
+    // source with an exact port of Qt's per-pixel formula (see colorGradingMatrix),
+    // so it grades the blur, not the sharp source underneath it.
+    private void drawGraded(MultiEffect me, Item source, float w, float h, float alpha) {
+        float[] matrix = colorGradingMatrix(me);
+        if (matrix == null) {
+            drawBlurred(me, source, w, h, alpha);
+            return;
         }
-        try { drawSourceAtEffectOrigin(source, alpha); }
-        finally { canvas.restoreToCount(save); }
+        try (Paint gp = new Paint().setColorFilter(ColorFilter.makeMatrix(new ColorMatrix(matrix)))) {
+            int save = canvas.saveLayer(Rect.makeXYWH(0, 0, Math.max(0f, w), Math.max(0f, h)), gp);
+            try { drawBlurred(me, source, w, h, alpha); }
+            finally { canvas.restoreToCount(save); }
+        }
+    }
+
+    // Blur is a real Gaussian (ImageFilter.makeBlur), not Qt's cheaper multi-level
+    // downsample-and-blend mip approximation (see MultiEffect for the property-
+    // semantics note) -- same visual knobs, a higher-quality primitive underneath.
+    private void drawBlurred(MultiEffect me, Item source, float w, float h, float alpha) {
+        float sigma = Boolean.TRUE.equals(me.blurEnabled.peek()) ? blurSigma(me) : 0f;
+        if (sigma <= 0f) {
+            int save = canvas.save();
+            try { drawSourceAtEffectOrigin(source, alpha); }
+            finally { canvas.restoreToCount(save); }
+            return;
+        }
+        try (Paint bp = new Paint().setImageFilter(ImageFilter.makeBlur(sigma, sigma, FilterTileMode.DECAL))) {
+            float mg = sigma * 3f + 4f;
+            int save = canvas.saveLayer(Rect.makeXYWH(-mg, -mg, w + 2 * mg, h + 2 * mg), bp);
+            try { drawSourceAtEffectOrigin(source, alpha); }
+            finally { canvas.restoreToCount(save); }
+        }
+    }
+
+    // blur (0..1, fraction of blurMax) and blurMultiplier (extends the radius further,
+    // at a quality cost in real Qt -- irrelevant here since makeBlur is already exact)
+    // combine into a pixel radius, matching Qt's parameter semantics if not its
+    // mip-chain algorithm.
+    private static float blurSigma(MultiEffect me) {
+        float blur = Math.max(0f, Math.min(1f, me.blur.peekFloat()));
+        float blurMax = Math.max(0f, me.blurMax.peekFloat());
+        float blurMultiplier = Math.max(0f, me.blurMultiplier.peekFloat());
+        return Renderer.sigma(blur * blurMax * (1f + blurMultiplier));
+    }
+
+    // Exact port of multieffect.frag's "contrast, brightness, saturation and
+    // colorization" block, converted from premultiplied- to unpremultiplied-alpha
+    // space (Skia's ColorMatrix operates unpremultiplied): the shader's alpha-scaled
+    // pivot/additive terms (`- 0.5*color.a`, `+= brightness*color.a`) reduce exactly to
+    // the classic alpha-independent formulas once divided through by alpha, so the
+    // whole pipeline becomes a single linear 3x3+offset transform on RGB:
+    //   contrast+brightness: c1 = rgb*(1+contrast) + (brightness - 0.5*contrast)
+    //   colorize:  gray = luma(c1) [Rec.601 weights, matching Qt's dot(.., vec3(0.299,0.587,0.114))]
+    //              c2 = mix(c1, gray*colorizationColor.rgb, effAlpha)
+    //              where effAlpha = clamp(colorizationColor.alpha * colorization, 0, 1)
+    //              (Qt folds `colorization` into colorizationColor.a on the CPU side)
+    //   saturation: out = mix(gray, c2, 1 + saturation) -- reuses the SAME gray as colorize,
+    //              not a re-luma of the colorized result
+    // Returns null (skip -- true identity) only when all four knobs are at Qt's
+    // defaults (0), the one case where this whole pipeline is provably a no-op.
+    private static float[] colorGradingMatrix(MultiEffect me) {
+        float contrast = me.contrast.peekFloat();
+        float brightness = me.brightness.peekFloat();
+        float saturation = me.saturation.peekFloat();
+        float colorization = me.colorization.peekFloat();
+        if (contrast == 0f && brightness == 0f && saturation == 0f && colorization == 0f) return null;
+
+        int cc = Renderer.parseColor(me.colorizationColor.peek());
+        float ccA = ((cc >>> 24) & 0xFF) / 255f;
+        float ccR = ((cc >>> 16) & 0xFF) / 255f;
+        float ccG = ((cc >>> 8) & 0xFF) / 255f;
+        float ccB = (cc & 0xFF) / 255f;
+        float effAlpha = Math.max(0f, Math.min(1f, ccA * colorization));
+        float ia = 1f - effAlpha;
+
+        float cb = 1f + contrast;
+        float add = brightness - 0.5f * contrast;
+
+        // Rec.601 luma weights.
+        float wr = 0.299f, wg = 0.587f, wb = 0.114f;
+
+        // colorize, as a matrix on c1: c2 = M2*c1, M2 = effAlpha*outer(cc,w) + ia*I
+        float[][] m2 = {
+            { effAlpha * ccR * wr + ia,  effAlpha * ccR * wg,         effAlpha * ccR * wb },
+            { effAlpha * ccG * wr,       effAlpha * ccG * wg + ia,    effAlpha * ccG * wb },
+            { effAlpha * ccB * wr,       effAlpha * ccB * wg,         effAlpha * ccB * wb + ia },
+        };
+
+        // saturation, folded in on c1: out = (1+sat)*c2 - sat*(w . c1) = [(1+sat)*M2 - sat*w] * c1
+        float sat1 = 1f + saturation;
+        float[][] m3 = new float[3][3];
+        for (int i = 0; i < 3; i++) {
+            m3[i][0] = sat1 * m2[i][0] - saturation * wr;
+            m3[i][1] = sat1 * m2[i][1] - saturation * wg;
+            m3[i][2] = sat1 * m2[i][2] - saturation * wb;
+        }
+
+        // fold in contrast+brightness (c1 = cb*rgb + add): total = m3*(cb*rgb + add) = (m3*cb)*rgb + (m3 row-sum)*add
+        float[] mat = new float[20];
+        for (int row = 0; row < 3; row++) {
+            float rowSum = m3[row][0] + m3[row][1] + m3[row][2];
+            mat[row * 5] = m3[row][0] * cb;
+            mat[row * 5 + 1] = m3[row][1] * cb;
+            mat[row * 5 + 2] = m3[row][2] * cb;
+            mat[row * 5 + 3] = 0f; // alpha input coefficient -- unpremultiplied formulas are alpha-independent
+            mat[row * 5 + 4] = rowSum * add;
+        }
+        mat[15] = 0f; mat[16] = 0f; mat[17] = 0f; mat[18] = 1f; mat[19] = 0f; // alpha row: identity
+        return mat;
+    }
+
+    // DST_IN keyed by the mask's raw alpha, remapped through Qt's threshold/spread
+    // window via a table ColorFilter (a 256-entry alpha LUT; a runtime SkSL shader
+    // would need extra vetting across Skija's raster/GPU/Android backends). Always
+    // applied, including at the property defaults: those defaults (thresholdMin 0,
+    // thresholdMax 1, spread 0) are NOT a pass-through in Qt -- the two smoothstep
+    // windows collapse to razor-thin ramps pinned at alpha 0 and 1, so stock
+    // MultiEffect treats any non-zero mask alpha as fully visible (a near-binary
+    // silhouette test), not a proportional multiply. A smooth per-pixel fade needs
+    // the threshold moved off the 0/1 extremes and spread widened -- see
+    // MultiEffectMaskTest for a worked example.
+    private static Paint maskCompositePaint(MultiEffect me) {
+        Paint paint = new Paint().setBlendMode(BlendMode.DST_IN);
+        boolean inverted = Boolean.TRUE.equals(me.maskInverted.peek());
+        byte[] alphaTable = maskAlphaTable(
+            me.maskThresholdMin.peekFloat(), me.maskThresholdMax.peekFloat(),
+            me.maskSpreadAtMin.peekFloat(), me.maskSpreadAtMax.peekFloat(), inverted);
+        paint.setColorFilter(ColorFilter.makeTableARGB(alphaTable, null, null, null));
+        return paint;
+    }
+
+    // Port of QQuickMultiEffectPrivate::updateMaskThresholdSpread (qtdeclarative
+    // src/effects/qquickmultieffect.cpp) composed with the MASK block of
+    // multieffect.frag: two smoothstep windows -- one anchored at maskThresholdMin and
+    // widened toward 0 by maskSpreadAtMin, one anchored at maskThresholdMax and widened
+    // toward 1 by maskSpreadAtMax -- multiplied together, then flipped when inverted.
+    private static byte[] maskAlphaTable(float thresholdMin, float thresholdMax,
+                                          float spreadMin, float spreadMax, boolean inverted) {
+        final double c0 = 0.0001;
+        final double c1 = 1.0 - c0;
+        double mt1 = thresholdMin + c0;
+        double ms1 = spreadMin + 1.0;
+        double mt2 = c1 - thresholdMax;
+        double ms2 = spreadMax + 1.0;
+        double edge0Min = mt1 * ms1 - (ms1 - c1);
+        double edge1Min = mt1 * ms1;
+        double edge0Max = mt2 * ms2 - (ms2 - c1);
+        double edge1Max = mt2 * ms2;
+        byte[] table = new byte[256];
+        for (int i = 0; i < 256; i++) {
+            double a = i / 255.0;
+            double m1 = smoothstep(edge0Min, edge1Min, a);
+            double m2 = smoothstep(edge0Max, edge1Max, 1.0 - a);
+            double mm = m1 * m2;
+            double out = inverted ? 1.0 - mm : mm;
+            table[i] = (byte) Math.round(Math.max(0.0, Math.min(1.0, out)) * 255.0);
+        }
+        return table;
+    }
+
+    private static double smoothstep(double edge0, double edge1, double x) {
+        if (edge1 <= edge0) return x < edge0 ? 0.0 : 1.0;
+        double t = Math.max(0.0, Math.min(1.0, (x - edge0) / (edge1 - edge0)));
+        return t * t * (3.0 - 2.0 * t);
     }
 
     // The effect renders its source at the effect's own origin (the clip/mask is in
@@ -936,18 +1166,6 @@ public final class Painter {
         canvas.translate(-source.x.peekFloat(), -source.y.peekFloat());
         try { renderer.drawForced(canvas, source, alpha); }
         finally { canvas.restoreToCount(s); }
-    }
-
-    // The first Rectangle in the mask subtree -- its effective per-corner radii
-    // define the clip shape.
-    private static Rectangle maskRect(Object maskSource) {
-        if (!(maskSource instanceof Item)) return null;
-        if (maskSource instanceof Rectangle) return (Rectangle) maskSource;
-        for (Item n : ((Item) maskSource).children) {
-            Rectangle r = maskRect(n);
-            if (r != null) return r;
-        }
-        return null;
     }
 
     private static final long CARET_BLINK_MS = 500;

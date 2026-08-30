@@ -27,7 +27,13 @@ public final class QtGlobals {
     private QtGlobals() {}
 
     public static Scriptable build(Context cx) {
-        ScriptableObject scope = cx.initStandardObjects();
+        return build(cx, false);
+    }
+
+    public static Scriptable build(Context cx, boolean safeStandardObjects) {
+        ScriptableObject scope = safeStandardObjects
+                ? cx.initSafeStandardObjects()
+                : cx.initStandardObjects();
 
         NativeObject qt = enumObject(QT);
         qt.put("rgba", qt, fn("rgba", 4, a -> QtColorFactory.qtRgba(arg(a, 0), arg(a, 1), arg(a, 2), arg(a, 3))));
@@ -92,11 +98,11 @@ public final class QtGlobals {
                     org.mozilla.javascript.Function jf = (org.mozilla.javascript.Function) f;
                     Scriptable home = jf.getParentScope() != null ? jf.getParentScope() : scope;
                     Scheduler.qtCallLater((Runnable) () -> {
-                        Context c = JsRuntime.enter();
+                        Context c = JsRuntime.enter(home);
                         try {
                             jf.call(c, home, home, ScriptRuntime.emptyArgs);
                         } finally {
-                            Context.exit();
+                            JsRuntime.exit();
                         }
                     });
                 }

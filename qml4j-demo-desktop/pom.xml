@@ -5,7 +5,7 @@
     <parent>
         <groupId>io.github.timer-err</groupId>
         <artifactId>qml4j-parent</artifactId>
-        <version>0.2.29</version>
+        <version>0.2.32</version>
     </parent>
 
     <artifactId>qml4j-demo-desktop</artifactId>

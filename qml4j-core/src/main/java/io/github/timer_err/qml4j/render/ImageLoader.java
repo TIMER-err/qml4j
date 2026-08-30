@@ -22,6 +22,7 @@ import java.util.concurrent.Executors;
 // the bytes and rasterizes them, so Skija's makeFromEncoded/downscale never runs on the
 // render thread (which would stall the frame a cover switches or a thumbnail scrolls in).
 final class ImageLoader {
+    private static final int MAX_REMOTE_BYTES = 16 * 1024 * 1024;
 
     private ImageLoader() {}
 
@@ -38,11 +39,12 @@ final class ImageLoader {
     // Load (local or remote) AND decode the source off the render thread into a raster
     // image the render thread just adopts. `gen` guards a superseded source: if the node's
     // decodeGen moved on (a newer source, or the item was released) the result is dropped.
-    static void decode(Image node, String src, long gen, ResourceLoader resources) {
+    static void decode(Image node, String src, long gen, ResourceLoader resources,
+                       NetworkResourcePolicy networkPolicy) {
         POOL.submit(() -> {
             byte[] bytes = null;
             try {
-                if (isRemote(src)) bytes = get(src, 5);
+                if (isRemote(src)) bytes = get(src, 5, networkPolicy);
                 else if (resources != null) bytes = resources.load(src);
             } catch (Throwable ignore) {
                 // bytes stays null -> treated as a failed load below
@@ -125,24 +127,28 @@ final class ImageLoader {
 
     // HttpURLConnection only auto-follows same-scheme redirects; GitHub raw -> CDN often
     // crosses http<->https, so follow Location manually with a hop limit.
-    private static byte[] get(String url, int redirects) throws Exception {
+    private static byte[] get(String url, int redirects, NetworkResourcePolicy policy) throws Exception {
         if (redirects < 0) return null;
+        if (policy != null && !policy.allow(url)) return null;
         HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection(PROXY);
-        conn.setInstanceFollowRedirects(true);
+        conn.setInstanceFollowRedirects(false);
         conn.setConnectTimeout(8000);
         conn.setReadTimeout(15000);
         conn.setRequestProperty("User-Agent", "qml4j");
         int code = conn.getResponseCode();
         if (code >= 300 && code < 400) {
             String loc = conn.getHeaderField("Location");
-            return loc == null ? null : get(loc, redirects - 1);
+            return loc == null ? null : get(new URL(new URL(url), loc).toString(), redirects - 1, policy);
         }
         if (code != 200) return null;
         try (InputStream in = conn.getInputStream()) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             byte[] buf = new byte[8192];
             int n;
-            while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+            while ((n = in.read(buf)) != -1) {
+                if (out.size() + n > MAX_REMOTE_BYTES) return null;
+                out.write(buf, 0, n);
+            }
             return out.toByteArray();
         }
     }

@@ -9,6 +9,19 @@ public class Text extends Item {
     public final Property<String> color = new Property<>("#000000");
     public final Property<Number> fontSize = new Property<>(14);
     public final Font font = new Font();
+
+    // Qt Text.style: Normal/Outline/Raised/Sunken. styleColor is the outline colour for
+    // Outline, the shadow colour for Raised/Sunken. styleWidth is a qml4j extension --
+    // stock Qt Quick draws Outline as a fixed ~1px offset ring with no configurable
+    // thickness; a value <= 0 falls back to that same ~1px look, > 0 makes it thicker.
+    public static final int STYLE_NORMAL = 0;
+    public static final int STYLE_OUTLINE = 1;
+    public static final int STYLE_RAISED = 2;
+    public static final int STYLE_SUNKEN = 3;
+    public final Property<Number> style = new Property<>(STYLE_NORMAL);
+    public final Property<String> styleColor = new Property<>("#000000");
+    public final Property<Number> styleWidth = new Property<>(0);
+
     public final Property<Number> wrapMode = new Property<>(0);            // Text.NoWrap
     public final Property<Number> horizontalAlignment = new Property<>(1); // Text.AlignLeft
     @SuppressWarnings("unused")
@@ -30,7 +43,7 @@ public class Text extends Item {
         wireContentInvalidation(text, color, fontSize, wrapMode, horizontalAlignment,
             verticalAlignment, elide, maximumLineCount, lineHeight,
             font.family, font.pixelSize, font.pointSize, font.weight, font.bold, font.italic,
-            font.capitalization);
+            font.capitalization, style, styleColor, styleWidth);
     }
 
     // Effective pixel size: Qt's font.pixelSize wins when set, else flat fontSize.
@@ -75,9 +88,6 @@ public class Text extends Item {
         }
         String s = p.displayTextFor(this);
         if (s.isEmpty()) return;
-        boolean elideRight = elide.peekInt() == 3; // Text.ElideRight
-        boolean bold = Boolean.TRUE.equals(font.bold.peek()) || font.weight.peekInt() >= 63;
-        p.drawWrappedText(s, w, argb, size, wrapMode.peekInt(), elideRight, bold,
-                          horizontalAlignment.peekInt(), maximumLineCount.peekInt());
+        p.drawWrappedText(this, s, w, alpha);
     }
 }

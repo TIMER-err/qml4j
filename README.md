@@ -35,6 +35,22 @@ view.load(
 // then, inside your render loop:  view.renderFrame(surfaceBackend);
 ```
 
+For third-party QML, create a safe JavaScript realm, use the restricted stock
+type set, confine resources, and provide a network policy. Host bridges implement
+`QmlSafeBridge` to allow only explicitly named methods; inherited reflection
+methods and native file/window types remain unavailable. Safe-realm bindings,
+handlers, imported scripts, and deferred callbacks run interpreted with an
+instruction-observed deadline (100 ms by default, configurable with
+`-Dqml4j.safeEvalMs=...`).
+
+```java
+QmlEngine engine = new QmlEngine(new JvmClassLoaderBackend(), true);
+QmlView pluginView = new QmlView(engine, StockTypes.safeRegistry())
+    .resources(confinedResources)
+    .networkPolicy(url -> allowedDomain(url))
+    .context("plugin", safeBridge);
+```
+
 Or run a whole QML project from disk, quickshell-style — point the desktop host at a directory and an entry file:
 
 ```sh

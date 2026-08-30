@@ -8,6 +8,7 @@ import io.github.timer_err.qml4j.render.items.input.TextEditable;
 import io.github.timer_err.qml4j.render.items.input.TextInput;
 
 import io.github.humbleui.skija.Canvas;
+import io.github.timer_err.qml4j.compiler.CompiledSceneCache;
 import io.github.timer_err.qml4j.compiler.TypeRegistry;
 import io.github.timer_err.qml4j.compiler.bytecode.rhino.RhinoScope;
 import io.github.timer_err.qml4j.engine.QmlEngine;
@@ -28,11 +29,13 @@ public final class QmlView {
     private final Renderer renderer = new Renderer();
     private final DirtyQueue dirty = new DirtyQueue();
     private final Loader loader;
+    private final QmlEngine engine;
     private final FocusManager focus = new FocusManager();
     private final EventDispatcher events = new EventDispatcher(focus, renderer);
     private Item root;
 
     public QmlView(QmlEngine engine, TypeRegistry types) {
+        this.engine = engine;
         this.loader = new Loader(engine, types);
         renderer.setComponentFactory(loader);
         renderer.setPictureCache(PICTURE_CACHE);
@@ -45,6 +48,22 @@ public final class QmlView {
     public QmlView resources(ResourceLoader res) {
         loader.setResources(res);
         renderer.setResourceLoader(res);
+        return this;
+    }
+
+    /**
+     * Reuse a host-persisted generated scene for the first {@link #load} call.
+     * The host owns {@code key}; it must change whenever any reachable QML, qmldir,
+     * JavaScript import, context contract, or qml4j version changes.
+     */
+    public QmlView compilationCache(CompiledSceneCache cache, String key) {
+        loader.setCompilationCache(cache, key);
+        return this;
+    }
+
+    /** Restrict remote Image sources. Redirect hops are checked independently. */
+    public QmlView networkPolicy(NetworkResourcePolicy policy) {
+        renderer.setNetworkResourcePolicy(policy);
         return this;
     }
 
@@ -74,7 +93,7 @@ public final class QmlView {
     // it as a free identifier. Register before load() so the compiler accepts it.
     public QmlView context(String name, Object value) {
         RhinoScope.registerContextProperty(name);
-        JsRuntime.putGlobal(name, value);
+        JsRuntime.putGlobal(engine.jsRealm(), name, value);
         return this;
     }
 

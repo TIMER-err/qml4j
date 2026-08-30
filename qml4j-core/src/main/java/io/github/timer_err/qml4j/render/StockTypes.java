@@ -148,4 +148,14 @@ public final class StockTypes {
             .register("QtObject", QtObject.class)
             .registerSingleton("StyleManager", StyleManager.class);
     }
+
+    /** Stock visual types without host filesystem/window facilities or shared
+     * process-wide style state. Intended for third-party QML documents. */
+    public static TypeRegistry safeRegistry() {
+        return registry()
+                .unregister("FileDialog")
+                .unregister("Window")
+                .unregister("ApplicationWindow")
+                .unregister("StyleManager");
+    }
 }

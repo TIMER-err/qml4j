@@ -27,13 +27,13 @@ public final class RhinoJsBinding extends Binding {
 
     @Override
     public Object evaluate() {
-        Context cx = JsRuntime.enter();
+        Context cx = JsRuntime.enter(scope);
         try {
             return JsWrap.toJava(fn.call(cx, scope, scope, ScriptRuntime.emptyArgs));
         } catch (EcmaError e) {
             return null;
         } finally {
-            Context.exit();
+            JsRuntime.exit();
         }
     }
 }

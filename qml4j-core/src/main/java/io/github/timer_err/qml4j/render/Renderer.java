@@ -47,6 +47,7 @@ public final class Renderer {
 
     private Paint paint;
     private ResourceLoader resources;
+    private NetworkResourcePolicy networkResourcePolicy;
     private ComponentFactory factory;
     private final FontResolver fonts = new FontResolver();
     private final IconResolver icons = new IconResolver(fonts);
@@ -55,6 +56,10 @@ public final class Renderer {
 
     public void setResourceLoader(ResourceLoader loader) {
         this.resources = loader;
+    }
+
+    public void setNetworkResourcePolicy(NetworkResourcePolicy policy) {
+        this.networkResourcePolicy = policy;
     }
 
     /** Override the UI font (regular + medium) from app-provided bytes; either may be
@@ -79,6 +84,10 @@ public final class Renderer {
 
     ResourceLoader resources() {
         return resources;
+    }
+
+    NetworkResourcePolicy networkResourcePolicy() {
+        return networkResourcePolicy;
     }
 
     FontResolver fonts() {
@@ -614,7 +623,7 @@ public final class Renderer {
     }
 
     // Draw a node ignoring its own `visible` flag (used to render a MultiEffect
-    // source, which is normally an invisible sibling rendered only via the effect).
+    // source or mask, both normally invisible siblings rendered only via the effect).
     void drawForced(Canvas canvas, Item node, float inheritedAlpha) {
         // (Layout is done once in settleLayout; no per-node re-measure in draw.)
         float x = node.x.peekFloat();

@@ -33,6 +33,12 @@ public final class TypeRegistry {
         return this;
     }
 
+    public TypeRegistry unregister(String qmlName) {
+        types.remove(qmlName);
+        singletons.remove(qmlName);
+        return this;
+    }
+
     public Class<? extends QObject> singletonClass(String qmlName) {
         return singletons.get(qmlName);
     }

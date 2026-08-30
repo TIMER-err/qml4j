@@ -5,6 +5,7 @@ import io.github.timer_err.qml4j.runtime.invoke.MethodInvocation;
 import io.github.timer_err.qml4j.engine.binding.Property;
 import io.github.timer_err.qml4j.engine.Callable;
 import io.github.timer_err.qml4j.engine.QObject;
+import io.github.timer_err.qml4j.engine.QmlSafeBridge;
 import io.github.timer_err.qml4j.engine.Signal;
 import org.mozilla.javascript.BaseFunction;
 import org.mozilla.javascript.Context;
@@ -137,14 +138,14 @@ public final class JsWrap {
         @Override public Object unwrap() { return fn; }
 
         @Override public Object call(Object[] args) {
-            Context cx = JsRuntime.enter();
+            Scriptable home = fn.getParentScope();
+            Context cx = JsRuntime.enter(home);
             try {
-                Scriptable home = fn.getParentScope();
                 Object[] ja = new Object[args == null ? 0 : args.length];
                 for (int i = 0; i < ja.length; i++) ja[i] = toJs(args[i], home);
                 return toJava(fn.call(cx, home, home, ja));
             } finally {
-                Context.exit();
+                JsRuntime.exit();
             }
         }
     }
@@ -172,7 +173,7 @@ public final class JsWrap {
                 if (v instanceof Signal) return new SignalRef((Signal) v, parent);
                 return toJs(v, parent);
             }
-            if (isCallable(target, name)) {
+            if (isCallable(target, name, parent)) {
                 return new BoundMethod(target, name, parent);
             }
             return NOT_FOUND;
@@ -198,7 +199,7 @@ public final class JsWrap {
         }
 
         @Override public boolean has(String name, Scriptable start) {
-            return resolves(name) || isCallable(target, name);
+            return resolves(name) || isCallable(target, name, parent);
         }
 
         @Override public boolean has(int index, Scriptable start) { return true; }
@@ -329,6 +330,25 @@ public final class JsWrap {
     // Java method. Used by both the JavaMember member-access path and QmlScope's
     // bare-call resolution.
     static boolean isCallable(Object target, String name) {
+        return isCallable(target, name, null);
+    }
+
+    static boolean isCallable(Object target, String name, Scriptable scope) {
+        if (target == null) return false;
+        if (scope != null && JsRuntime.isSafeScope(scope)) {
+            if ("getClass".equals(name) || "wait".equals(name)
+                    || "notify".equals(name) || "notifyAll".equals(name)
+                    || "clone".equals(name) || "finalize".equals(name)) {
+                return false;
+            }
+            String className = target.getClass().getName();
+            boolean engineObject = target instanceof QObject
+                    || className.startsWith("io.github.timer_err.qml4j.");
+            if (!engineObject && (!(target instanceof QmlSafeBridge)
+                    || !((QmlSafeBridge) target).allowsQmlMethod(name))) {
+                return false;
+            }
+        }
         if (target instanceof QObject && ((QObject) target).__getFunction(name) != null) return true;
         return MethodInvocation.hasMethod(target.getClass(), name);
     }
@@ -402,12 +422,12 @@ public final class JsWrap {
         }
 
         @Override public Object get(String name, Scriptable start) {
-            if (isCallable(signal, name)) return new BoundMethod(signal, name, parent);
+            if (isCallable(signal, name, parent)) return new BoundMethod(signal, name, parent);
             return super.get(name, start);
         }
 
         @Override public boolean has(String name, Scriptable start) {
-            return isCallable(signal, name) || super.has(name, start);
+            return isCallable(signal, name, parent) || super.has(name, start);
         }
     }
 }
