@@ -23,7 +23,12 @@ public final class ColorMath {
         float[] hb = rgbToHsv(b);
         float aA = ((a >>> 24) & 0xFF) / 255f;
         float aB = ((b >>> 24) & 0xFF) / 255f;
-        float h = lerpHue(ha[0], hb[0], (float) t);
+        // Achromatic colors have no meaningful hue; keep the chromatic endpoint's
+        // hue so a color fading to gray does not detour through magenta.
+        float h;
+        if (ha[1] == 0f) h = hb[0];
+        else if (hb[1] == 0f) h = ha[0];
+        else h = lerpHue(ha[0], hb[0], (float) t);
         float s = ha[1] + (hb[1] - ha[1]) * (float) t;
         float v = ha[2] + (hb[2] - ha[2]) * (float) t;
         float alpha = aA + (aB - aA) * (float) t;
