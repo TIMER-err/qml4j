@@ -73,13 +73,13 @@ android {
 }
 
 dependencies {
-    skijaNative("io.github.humbleui:skija-android-arm64:0.143.16")
+    skijaNative("io.github.humbleui:skija-android-arm64:0.143.17")
 
-    // The RECODE refactor merged parser/engine/compiler/render into one module.
-    implementation("io.github.timer-err:qml4j-core:0.1.1")
+    // mavenLocal first (settings.gradle.kts): `mvn -pl qml4j-core install` wins over Central.
+    implementation("io.github.timer-err:qml4j-core:0.2.32")
 
-    implementation("io.github.humbleui:skija-shared:0.143.16")
-    implementation("io.github.humbleui:skija-android-arm64:0.143.16")
+    implementation("io.github.humbleui:skija-shared:0.143.17")
+    implementation("io.github.humbleui:skija-android-arm64:0.143.17")
 
     implementation("com.android.tools:r8:8.13.17")
 
