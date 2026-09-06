@@ -536,6 +536,12 @@ final class EventDispatcher {
     // Flickable's scroll axis: cancels the MouseArea press (no click) and hands
     // the live gesture to the Flickable, so list rows stay tappable yet scroll.
     private boolean stealsToFlick(float x, float y) {
+        // Qt's MouseArea.preventStealing: a child that has claimed the gesture keeps
+        // it for the rest of the press. Read live, so a control can open the door at
+        // press time (letting a vertical flick scroll the page) and close it once it
+        // recognises its own drag -- a horizontal slider drag then survives the
+        // finger drifting off-axis.
+        if (Boolean.TRUE.equals(captured.preventStealing.peek())) return false;
         String dir = pendingFlick.flickableDirection.peek();
         boolean allowX = !"VerticalFlick".equals(dir);
         boolean allowY = !"HorizontalFlick".equals(dir);
