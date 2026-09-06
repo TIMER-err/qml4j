@@ -183,12 +183,33 @@ public final class QmlView {
         focus.clearFocus();
     }
 
+    // Input handlers write properties, and a write with no DirtyQueue installed
+    // re-evaluates every dependent binding synchronously and recursively (see
+    // Property.reevaluate), so a diamond of dependents is walked again for each
+    // path that reaches it. A host that only installs the queue around its frame
+    // (the Android shell queues touches onto the GL thread outside onDrawFrame)
+    // therefore paid an exploding cost per pointer move on any control with a wide
+    // fan-out -- a NumberPicker wheel froze the UI. Batch here instead: dependents
+    // are queued, de-duplicated and evaluated once when the event is done.
+    private boolean batched(java.util.function.BooleanSupplier dispatch) {
+        DirtyQueue dq = dirtyQueue();
+        if (DirtyQueue.current() == dq) return dispatch.getAsBoolean();
+        dq.install();
+        try {
+            boolean handled = dispatch.getAsBoolean();
+            dq.flush();
+            return handled;
+        } finally {
+            dq.uninstall();
+        }
+    }
+
     public boolean dispatchKey(int keyCode, String text, boolean down) {
-        return events.dispatchKey(keyCode, text, down, false);
+        return batched(() -> events.dispatchKey(keyCode, text, down, false));
     }
 
     public boolean dispatchKey(int keyCode, String text, boolean down, boolean shift) {
-        return events.dispatchKey(keyCode, text, down, shift);
+        return batched(() -> events.dispatchKey(keyCode, text, down, shift));
     }
 
     public static final int KEY_BACKSPACE = -1;
@@ -204,35 +225,35 @@ public final class QmlView {
     public static final int KEY_BACKTAB = -11;
 
     public boolean dispatchClick(float x, float y) {
-        return events.dispatchClick(x, y);
+        return batched(() -> events.dispatchClick(x, y));
     }
 
     public boolean dispatchPointerDown(float x, float y) {
-        return events.dispatchPointerDown(x, y);
+        return batched(() -> events.dispatchPointerDown(x, y));
     }
 
     /** button is a Qt.MouseButton value: LeftButton=1, RightButton=2, MiddleButton=4. */
     @SuppressWarnings("unused") // host input API
     public boolean dispatchPointerDown(float x, float y, int button) {
-        return events.dispatchPointerDown(x, y, button);
+        return batched(() -> events.dispatchPointerDown(x, y, button));
     }
 
     public boolean dispatchPointerMove(float x, float y) {
-        return events.dispatchPointerMove(x, y);
+        return batched(() -> events.dispatchPointerMove(x, y));
     }
 
     public boolean dispatchPointerUp(float x, float y) {
-        return events.dispatchPointerUp(x, y);
+        return batched(() -> events.dispatchPointerUp(x, y));
     }
 
     /** button is a Qt.MouseButton value: LeftButton=1, RightButton=2, MiddleButton=4. */
     @SuppressWarnings("unused") // host input API
     public boolean dispatchPointerUp(float x, float y, int button) {
-        return events.dispatchPointerUp(x, y, button);
+        return batched(() -> events.dispatchPointerUp(x, y, button));
     }
 
     public boolean dispatchWheel(float x, float y, float dx, float dy) {
-        return events.dispatchWheel(x, y, dx, dy);
+        return batched(() -> events.dispatchWheel(x, y, dx, dy));
     }
 
     @SuppressWarnings("unused")
