@@ -4,9 +4,9 @@ import io.github.timer_err.qml4j.engine.DelegateHost;
 import io.github.timer_err.qml4j.engine.DelegateRoot;
 import io.github.timer_err.qml4j.engine.QObject;
 import io.github.timer_err.qml4j.engine.binding.Property;
+import io.github.timer_err.qml4j.runtime.invoke.MethodInvocation;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.util.Map;
 
 // Delegate-scope name resolution shared by the Rhino QmlScope: walk to the
@@ -33,10 +33,11 @@ public final class DelegateScope {
 
     private static boolean isCallableMember(Object o, String name) {
         if (o instanceof QObject && ((QObject) o).__getFunction(name) != null) return true;
-        for (Method m : o.getClass().getMethods()) {
-            if (m.getName().equals(name)) return true;
-        }
-        return false;
+        // Cached per class: this runs for every free identifier in every binding, at
+        // every level of the delegate's parent chain. An inline getMethods() scan
+        // re-allocated (and, on Android, re-sorted and de-duplicated) the whole method
+        // array per probe -- profiling a NumberPicker drag put 59% of all CPU here.
+        return MethodInvocation.hasMethod(o.getClass(), name);
     }
 
     // The object up the delegate's parent chain that owns settable property `name`:
