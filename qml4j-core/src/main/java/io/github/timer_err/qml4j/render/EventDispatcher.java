@@ -38,10 +38,12 @@ final class EventDispatcher {
     private Flickable scrolling;
     private float scrollStartContentX;
     private float scrollStartContentY;
-    // The Flickable under a captured MouseArea, eligible to steal the gesture for
-    // scrolling once the drag passes DRAG_THRESHOLD (Qt's flick-steals-from-child
-    // behaviour: a press on a clickable row still scrolls the list when dragged).
-    private Flickable pendingFlick;
+    // The Flickables under the press, innermost first, eligible to take the gesture
+    // for scrolling (Qt's flick-steals-from-child behaviour: a press on a clickable
+    // row still scrolls the list when dragged). The whole chain is kept, not just
+    // the innermost, so a drag picks the nearest ancestor that scrolls on the
+    // gesture's axis -- a vertical drag over a horizontal TabRow scrolls the page.
+    private final List<Flickable> pendingChain = new ArrayList<Flickable>(4);
     // Windowed velocity tracker. The fling speed handed to the Flickable on release
     // is the displacement across a short recent window of pointer samples, not a
     // running EMA of per-move deltas: an EMA reversed direction when the finger
@@ -362,21 +364,54 @@ final class EventDispatcher {
             hit.pressedSignal.emit(new MouseEvent(local[0], local[1], button, button, 0));
             beginDragIfRequested(hit);
             // If the MouseArea isn't dragging its own target, remember the
-            // Flickable beneath it so a drag past threshold scrolls the list.
+            // Flickables beneath it so a drag past threshold scrolls one of them.
             // Only a left press may hand off to a flick-scroll.
-            pendingFlick = (button == MouseEvent.LEFT_BUTTON && dragTarget == null)
-                ? hitTestFlickable(root, x, y) : null;
-            if (pendingFlick != null) {
-                pendingFlick.stopScroll();
-                scrollStartContentX = pendingFlick.contentX.peekFloat();
-                scrollStartContentY = pendingFlick.contentY.peekFloat();
+            pendingChain.clear();
+            if (button == MouseEvent.LEFT_BUTTON && dragTarget == null) {
+                hitTestFlickables(root, x, y, pendingChain);
+                for (int i = 0; i < pendingChain.size(); i++) pendingChain.get(i).stopScroll();
             }
             return true;
         }
         if (button != MouseEvent.LEFT_BUTTON) return false;
-        Flickable f = hitTestFlickable(root, x, y);
-        if (f == null) return false;
-        f.stopScroll();
+        // Pressed straight onto a Flickable. With nested scrollers, which one moves
+        // depends on the drag axis, so the choice waits for the first move; a lone
+        // Flickable takes the gesture immediately (it starts `moving` at press).
+        pendingChain.clear();
+        hitTestFlickables(root, x, y, pendingChain);
+        if (pendingChain.isEmpty()) return false;
+        for (int i = 0; i < pendingChain.size(); i++) pendingChain.get(i).stopScroll();
+        captureRootX = x;
+        captureRootY = y;
+        if (pendingChain.size() == 1) {
+            beginScroll(pendingChain.get(0), x, y);
+            return true;
+        }
+        beginScrollVelocity(x, y);
+        return true;
+    }
+
+    // The nearest Flickable in the pending chain that scrolls along the gesture's
+    // axis. The dominant axis is tried first, then the other one, so a mostly
+    // vertical drag prefers a vertical scroller but a horizontal-only chain still
+    // responds to the horizontal component.
+    private Flickable chooseFlickable(float x, float y, float threshold) {
+        float dx = x - captureRootX;
+        float dy = y - captureRootY;
+        boolean verticalFirst = Math.abs(dy) >= Math.abs(dx);
+        for (int pass = 0; pass < 2; pass++) {
+            boolean wantY = (pass == 0) == verticalFirst;
+            if ((wantY ? Math.abs(dy) : Math.abs(dx)) <= threshold) continue;
+            for (int i = 0; i < pendingChain.size(); i++) {
+                Flickable f = pendingChain.get(i);
+                if (wantY ? (allowY(f) && maxY(f) > 0f) : (allowX(f) && maxX(f) > 0f)) return f;
+            }
+        }
+        return null;
+    }
+
+    private void beginScroll(Flickable f, float x, float y) {
+        pendingChain.clear();
         scrolling = f;
         f.moving.set(Boolean.TRUE);
         captureRootX = x;
@@ -384,7 +419,6 @@ final class EventDispatcher {
         scrollStartContentX = f.contentX.peekFloat();
         scrollStartContentY = f.contentY.peekFloat();
         beginScrollVelocity(x, y);
-        return true;
     }
 
     boolean dispatchPointerMove(float x, float y) {
@@ -393,7 +427,7 @@ final class EventDispatcher {
             return true;
         }
         if (captured != null) {
-            if (pendingFlick != null && dragTarget == null && stealsToFlick(x, y)) {
+            if (!pendingChain.isEmpty() && dragTarget == null && stealsToFlick(x, y)) {
                 return true;
             }
             float[] local = localCoords(captured, x, y);
@@ -407,6 +441,13 @@ final class EventDispatcher {
         }
         if (scrolling != null) {
             applyScroll(x, y);
+            return true;
+        }
+        if (!pendingChain.isEmpty()) {
+            // A press that landed on the Flickables themselves: start scrolling the
+            // first one that moves along this gesture's axis.
+            Flickable f = chooseFlickable(x, y, 0f);
+            if (f != null) beginScroll(f, x, y);
             return true;
         }
         return updateHover(x, y);
@@ -457,7 +498,7 @@ final class EventDispatcher {
             return true;
         }
         if (captured != null) {
-            pendingFlick = null;
+            pendingChain.clear();
             MouseArea target = captured;
             float[] local = localCoords(target, x, y);
             target.mouseX.set(local[0]);
@@ -542,12 +583,8 @@ final class EventDispatcher {
         // recognises its own drag -- a horizontal slider drag then survives the
         // finger drifting off-axis.
         if (Boolean.TRUE.equals(captured.preventStealing.peek())) return false;
-        String dir = pendingFlick.flickableDirection.peek();
-        boolean allowX = !"VerticalFlick".equals(dir);
-        boolean allowY = !"HorizontalFlick".equals(dir);
-        boolean past = (allowY && Math.abs(y - captureRootY) > DRAG_THRESHOLD)
-                    || (allowX && Math.abs(x - captureRootX) > DRAG_THRESHOLD);
-        if (!past) return false;
+        Flickable target = chooseFlickable(x, y, DRAG_THRESHOLD);
+        if (target == null) return false;
         MouseArea ma = captured;
         ma.pressed.set(Boolean.FALSE);
         setContains(ma, false);
@@ -556,14 +593,7 @@ final class EventDispatcher {
         // press (e.g. Ripple's wave) never learns it ended and stays stuck.
         ma.canceled.emit();
         captured = null;
-        scrolling = pendingFlick;
-        pendingFlick = null;
-        scrolling.moving.set(Boolean.TRUE);
-        captureRootX = x;
-        captureRootY = y;
-        scrollStartContentX = scrolling.contentX.peekFloat();
-        scrollStartContentY = scrolling.contentY.peekFloat();
-        beginScrollVelocity(x, y);
+        beginScroll(target, x, y);
         applyScroll(x, y);
         return true;
     }
@@ -699,12 +729,6 @@ final class EventDispatcher {
 
     private static float maxY(Flickable f) {
         return Math.max(0f, f.contentHeight.peekFloat() + f.bottomMargin.peekFloat() - f.height.peekFloat());
-    }
-
-    private Flickable hitTestFlickable(Item item, float x, float y) {
-        List<Flickable> chain = new ArrayList<Flickable>(4);
-        hitTestFlickables(item, x, y, chain);
-        return chain.isEmpty() ? null : chain.get(0);
     }
 
     // Appends every interactive Flickable containing (x, y) to out, innermost first.
