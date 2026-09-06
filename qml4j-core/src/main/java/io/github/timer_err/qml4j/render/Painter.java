@@ -162,11 +162,17 @@ public final class Painter {
         float dsy = quantizeScale(Math.abs(sy));
         int iw = Math.max(1, Math.round(w * dsx));
         int ih = Math.max(1, Math.round(h * dsy));
-        if (node.backing == null || node.backingW != iw || node.backingH != ih) {
-            if (node.backing != null) node.backing.close();
+        int generation = renderer.gpuGeneration();
+        boolean contextLost = node.backing != null && node.backingGeneration != generation;
+        if (node.backing == null || node.backingW != iw || node.backingH != ih || contextLost) {
+            // A backing from a destroyed GL context must not be closed -- that would
+            // free through a dead context. Drop the reference and let the driver
+            // reclaim it with the context it belonged to; only resizes close.
+            if (node.backing != null && !contextLost) node.backing.close();
             node.backing = makeBackingSurface(iw, ih);
             node.backingW = iw;
             node.backingH = ih;
+            node.backingGeneration = generation;
             node.dirty = true;
         }
         if (node.dirty) {

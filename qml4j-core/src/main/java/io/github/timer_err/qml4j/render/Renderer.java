@@ -114,13 +114,23 @@ public final class Renderer {
     // The GPU context of the surface being rendered, threaded to Painter so a Canvas item's
     // offscreen backing is made on the same context (a raster offscreen won't blit on GPU).
     private io.github.humbleui.skija.DirectContext gpuContext;
+    // Bumped whenever the host hands over a different context -- i.e. the old GL
+    // context was destroyed (Android backgrounds the app) and a new one created.
+    // GPU-backed offscreens made on the dead context blit as nothing, so they are
+    // keyed on this and rebuilt after the swap.
+    private int gpuGeneration;
 
     public void setGpuContext(io.github.humbleui.skija.DirectContext ctx) {
+        if (ctx != this.gpuContext) gpuGeneration++;
         this.gpuContext = ctx;
     }
 
     io.github.humbleui.skija.DirectContext gpuContext() {
         return gpuContext;
+    }
+
+    int gpuGeneration() {
+        return gpuGeneration;
     }
 
     @SuppressWarnings("unused")

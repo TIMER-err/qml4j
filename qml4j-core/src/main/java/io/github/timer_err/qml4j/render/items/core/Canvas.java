@@ -25,6 +25,9 @@ public class Canvas extends Item {
     public io.github.humbleui.skija.Surface backing;
     public int backingW = -1;
     public int backingH = -1;
+    // Renderer.gpuGeneration() the backing was created on; a mismatch means the GL
+    // context behind it is gone and the backing must be rebuilt.
+    public int backingGeneration = -1;
     public boolean dirty = true;
 
     // Set for the duration of a paint pass so the onPaint handler's getContext() returns
