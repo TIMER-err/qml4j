@@ -1,6 +1,5 @@
 package io.github.timer_err.qml4j.render;
 
-import io.github.humbleui.skija.Data;
 import io.github.humbleui.skija.Font;
 import io.github.humbleui.skija.FontHinting;
 import io.github.humbleui.skija.FontMgr;
@@ -96,8 +95,8 @@ final class FontResolver {
     private static Typeface makeFace(byte[] bytes) {
         FontMgr mgr = FontMgr.getDefault();
         if (bytes == null || mgr == null) return null;
-        try (Data data = Data.makeFromBytes(bytes)) {
-            return mgr.makeFromData(data);
+        try {
+            return SharedTypefaceCache.acquire(mgr, bytes);
         } catch (Throwable t) {
             return null;
         }
