@@ -81,7 +81,7 @@ final class ImageLoader {
     // render thread) by drawing into a raster surface -- makeFromEncoded alone is lazy and
     // would otherwise decode on first draw, back on the render thread. Honours sourceSize
     // like Qt: shrink to ~display size so a multi-megapixel photo isn't sampled every frame.
-    private static io.github.humbleui.skija.Image decodeRaster(byte[] bytes, int sw, int sh) {
+    static io.github.humbleui.skija.Image decodeRaster(byte[] bytes, int sw, int sh) {
         io.github.humbleui.skija.Image full = io.github.humbleui.skija.Image.makeDeferredFromEncodedBytes(bytes);
         int iw = full.getWidth(), ih = full.getHeight();
         float f;
@@ -92,9 +92,11 @@ final class ImageLoader {
         int tw = f < 1f ? Math.max(1, Math.round(iw * f)) : iw;
         int th = f < 1f ? Math.max(1, Math.round(ih * f)) : ih;
         try (Surface surf = Surface.makeRaster(ImageInfo.makeN32Premul(tw, th))) {
+            // Strict source bounds disable Skia's mipmaps. This is the complete
+            // image, so allow edge sampling to average detail during minification.
             surf.getCanvas().drawImageRect(full,
                     Rect.makeXYWH(0, 0, iw, ih), Rect.makeXYWH(0, 0, tw, th),
-                    new FilterMipmap(FilterMode.LINEAR, MipmapMode.LINEAR), null, true);
+                    new FilterMipmap(FilterMode.LINEAR, MipmapMode.LINEAR), null, false);
             io.github.humbleui.skija.Image raster = surf.makeImageSnapshot();
             full.close();
             return raster;
