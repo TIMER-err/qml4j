@@ -58,6 +58,7 @@ public final class DesktopMain {
             System.err.println("usage:  <projectDir> <entry.qml>   |   app   |   mock <projectDir> <entry.qml>");
             return;
         }
+        GlfwPlatform.configure();
         GLFWErrorCallback.createPrint(System.err).set();
         if (!GLFW.glfwInit()) {
             freeErrorCallback();
@@ -150,6 +151,7 @@ public final class DesktopMain {
     }
 
     private void createWindow() {
+        GlfwContext.configure();
         GLFW.glfwWindowHint(GLFW.GLFW_CONTEXT_VERSION_MAJOR, 3);
         GLFW.glfwWindowHint(GLFW.GLFW_CONTEXT_VERSION_MINOR, 2);
         GLFW.glfwWindowHint(GLFW.GLFW_OPENGL_PROFILE, GLFW.GLFW_OPENGL_CORE_PROFILE);
@@ -157,7 +159,10 @@ public final class DesktopMain {
         GLFW.glfwWindowHint(GLFW.GLFW_STENCIL_BITS, 8);
         GLFW.glfwWindowHint(GLFW.GLFW_RESIZABLE, GLFW.GLFW_TRUE);
 
-        window = GLFW.glfwCreateWindow(INITIAL_W, INITIAL_H, "qml4j showcases", MemoryUtil.NULL, MemoryUtil.NULL);
+        String platform = GlfwPlatform.currentName();
+        String title = Boolean.getBoolean("qml4j.frameStamp")
+            ? "qml4j frame diagnostics [" + platform + "]" : "qml4j showcases";
+        window = GLFW.glfwCreateWindow(INITIAL_W, INITIAL_H, title, MemoryUtil.NULL, MemoryUtil.NULL);
         if (window == MemoryUtil.NULL) {
             // run()'s finally drives glfwTerminate through shutdown(); don't tear down here.
             throw new IllegalStateException("glfwCreateWindow failed");
@@ -166,6 +171,8 @@ public final class DesktopMain {
         // vsync on by default; -Dqml4j.vsync=false uncaps the loop to measure real FPS.
         boolean vsync = !"false".equals(System.getProperty("qml4j.vsync", "true"));
         GLFW.glfwSwapInterval(vsync ? 1 : 0);
+        System.err.println("[host] GLFW platform=" + platform + " context=" + GlfwContext.currentName(window) + " vsync=" + vsync
+            + " gpuWait=" + Boolean.getBoolean("qml4j.gpuWait"));
     }
 
     private void updateScale(int fbW, int fbH) {

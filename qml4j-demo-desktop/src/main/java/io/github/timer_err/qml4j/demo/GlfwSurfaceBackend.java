@@ -11,15 +11,18 @@ import io.github.humbleui.skija.SurfaceOrigin;
 import io.github.timer_err.qml4j.render.SurfaceBackend;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.opengl.GL;
+import org.lwjgl.opengl.GL11;
 
 public final class GlfwSurfaceBackend implements SurfaceBackend {
 
     private final long window;
+    private final boolean gpuWait = Boolean.getBoolean("qml4j.gpuWait");
     private int width;
     private int height;
     private DirectContext context;
     private BackendRenderTarget target;
     private Surface surface;
+    private FrameStamp frameStamp;
 
     public GlfwSurfaceBackend(long window, int width, int height) {
         this.window = window;
@@ -34,6 +37,7 @@ public final class GlfwSurfaceBackend implements SurfaceBackend {
         GL.createCapabilities();
         context = DirectContext.makeGL();
         rebuildSurface();
+        if (Boolean.getBoolean("qml4j.frameStamp")) frameStamp = new FrameStamp(gpuWait);
     }
 
     @Override
@@ -54,7 +58,15 @@ public final class GlfwSurfaceBackend implements SurfaceBackend {
 
     @Override
     public void present() {
-        context.flush();
+        if (frameStamp != null) frameStamp.draw(surface.getCanvas(), width);
+        // Hand the surface to the window system only after Skia has submitted its
+        // drawing commands. flush() alone does not complete that handoff. Keep
+        // CPU/GPU execution asynchronous; the swap interval controls presentation.
+        context.flushAndSubmit(surface);
+        // Diagnostic A/B: finish this context's GPU work before the window handoff.
+        // Disabled normally because it serializes CPU/GPU execution; it does not
+        // wait for the compositor or prove that the frame reached the display.
+        if (gpuWait) GL11.glFinish();
         GLFW.glfwSwapBuffers(window);
     }
 
@@ -74,6 +86,7 @@ public final class GlfwSurfaceBackend implements SurfaceBackend {
 
     @Override
     public void dispose() {
+        if (frameStamp != null) { frameStamp.close(); frameStamp = null; }
         if (surface != null) { surface.close(); surface = null; }
         if (target != null) { target.close(); target = null; }
         if (context != null) { context.close(); context = null; }

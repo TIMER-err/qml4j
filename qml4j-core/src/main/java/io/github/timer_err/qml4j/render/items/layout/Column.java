@@ -21,7 +21,6 @@ public class Column extends Item {
             if (w > maxW) maxW = w;
         }
         if (y > 0) y -= s;
-        height.set(y);
-        if (maxW > width.peekDouble()) width.set(maxW);
+        PositionerSizing.update(this, maxW, y);
     }
 }

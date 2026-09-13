@@ -35,6 +35,7 @@ final class ShotMain {
         if (seed != null) sm.seedColor.set(seed);
         DirResourceLoader loader = new DirResourceLoader(Paths.get(dir));
         QmlView v = QmlView.withStockTypes(new QmlEngine()).resources(loader);
+        HostFonts.configure(v, loader);
         byte[] b = loader.load(entry);
         if (b == null) { System.out.println("entry not found: " + entry); return; }
         try { v.load(new String(b, StandardCharsets.UTF_8)); }

@@ -21,13 +21,8 @@ public class Row extends Item {
             if (h > maxH) maxH = h;
         }
         if (x > 0) x -= s;
-        width.set(x);
-        if (maxH > height.peekDouble()) height.set(maxH);
-        // Publish the content size as implicit size (like RowLayout/Column do) so a
-        // binding reading this Row's implicitWidth -- e.g. a SegmentedButton segment's
-        // `Math.max(contentRow.implicitWidth + 24, 48)` -- sizes to the content instead
-        // of reading 0 and collapsing.
-        implicitWidth.set(x);
-        implicitHeight.set(maxH);
+        // Explicit dimensions may bind to a container that is still settling.
+        // Writing width/height here clears those bindings and freezes the row.
+        PositionerSizing.update(this, x, maxH);
     }
 }

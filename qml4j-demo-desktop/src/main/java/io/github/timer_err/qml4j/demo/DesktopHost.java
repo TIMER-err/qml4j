@@ -83,6 +83,7 @@ final class DesktopHost {
         if (view != null) view.dispose();
         QmlEngine engine = new QmlEngine();
         view = QmlView.withStockTypes(engine).resources(rl);
+        HostFonts.configure(view, rl);
         view.setClipboard(clipboard);
         if (context != null) {
             for (Map.Entry<String, Object> e : context.entrySet()) view.context(e.getKey(), e.getValue());
