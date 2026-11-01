@@ -5,16 +5,12 @@
     <parent>
         <groupId>io.github.timer-err</groupId>
         <artifactId>qml4j-parent</artifactId>
-        <version>0.2.34</version>
+        <version>0.2.35</version>
     </parent>
 
     <artifactId>qml4j-demo-desktop</artifactId>
 
-    <!-- Demo app, not a published library: never deploy it to Central.
-         Inherits the parent's release=8 (Skija supports Java 8). -->
-    <properties>
-        <maven.deploy.skip>true</maven.deploy.skip>
-    </properties>
+    <!-- Inherits the parent's release=8 (Skija supports Java 8). -->
 
     <dependencies>
         <dependency>
@@ -93,15 +89,6 @@
                 <version>3.3.0</version>
                 <configuration>
                     <mainClass>io.github.timer_err.qml4j.demo.DesktopMain</mainClass>
-                </configuration>
-            </plugin>
-            <!-- Excluded from the Central bundle (config merges with the parent's
-                 release-profile plugin when -Prelease is active). -->
-            <plugin>
-                <groupId>org.sonatype.central</groupId>
-                <artifactId>central-publishing-maven-plugin</artifactId>
-                <configuration>
-                    <skipPublishing>true</skipPublishing>
                 </configuration>
             </plugin>
         </plugins>

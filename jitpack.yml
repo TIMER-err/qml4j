@@ -1,0 +1,4 @@
+jdk:
+  - openjdk17
+install:
+  - mvn -B --no-transfer-progress -Pjitpack -pl qml4j-core -am clean install -DskipTests

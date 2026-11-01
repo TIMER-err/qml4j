@@ -6,7 +6,7 @@
 
     <groupId>io.github.timer-err</groupId>
     <artifactId>qml4j-parent</artifactId>
-    <version>0.2.34</version>
+    <version>0.2.35</version>
     <packaging>pom</packaging>
 
     <name>qml4j</name>
@@ -197,13 +197,11 @@
         </plugins>
     </build>
 
-    <!-- `mvn -Prelease deploy` builds source+javadoc jars, GPG-signs everything,
-         and uploads the bundle to the Central Portal. Plain `mvn install` stays
-         fast (no signing/javadoc). Requires a `central` server in settings.xml
-         and a GPG key on a public keyserver. -->
+    <!-- JitPack installs the library and its documentation without publishing
+         credentials. The desktop demo is not part of that build. -->
     <profiles>
         <profile>
-            <id>release</id>
+            <id>jitpack</id>
             <build>
                 <plugins>
                     <plugin>
@@ -235,31 +233,6 @@
                                 </goals>
                             </execution>
                         </executions>
-                    </plugin>
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-gpg-plugin</artifactId>
-                        <version>3.2.4</version>
-                        <executions>
-                            <execution>
-                                <id>sign-artifacts</id>
-                                <phase>verify</phase>
-                                <goals>
-                                    <goal>sign</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                    </plugin>
-                    <plugin>
-                        <groupId>org.sonatype.central</groupId>
-                        <artifactId>central-publishing-maven-plugin</artifactId>
-                        <version>0.10.0</version>
-                        <extensions>true</extensions>
-                        <configuration>
-                            <publishingServerId>central</publishingServerId>
-                            <autoPublish>true</autoPublish>
-                            <waitUntil>validated</waitUntil>
-                        </configuration>
                     </plugin>
                 </plugins>
             </build>

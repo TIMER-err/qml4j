@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://central.sonatype.com/artifact/io.github.timer-err/qml4j-core"><img src="https://img.shields.io/maven-central/v/io.github.timer-err/qml4j-core?label=Maven%20Central&color=7C6CF0" alt="Maven Central"></a>
+  <a href="https://jitpack.io/#TIMER-err/qml4j/v0.2.35"><img src="https://jitpack.io/v/TIMER-err/qml4j.svg" alt="JitPack"></a>
   <img src="https://img.shields.io/badge/Java-8%2B-7C6CF0" alt="Java 8+">
   <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
 </p>
@@ -65,15 +65,23 @@ Or run a whole QML project from disk, quickshell-style — point the desktop hos
 
 ## Install
 
-`qml4j-core` is on Maven Central under the `io.github.timer-err` namespace.
+`qml4j-core` is distributed through JitPack as `com.github.TIMER-err.qml4j:qml4j-core:v0.2.35`. Other dependencies, including Skija, remain on Maven Central.
 
 Maven:
 
 ```xml
+<repositories>
+    <repository>
+        <id>jitpack.io</id>
+        <url>https://jitpack.io</url>
+    </repository>
+</repositories>
+
+<dependencies>
 <dependency>
-    <groupId>io.github.timer-err</groupId>
+    <groupId>com.github.TIMER-err.qml4j</groupId>
     <artifactId>qml4j-core</artifactId>
-    <version>0.2.34</version>
+    <version>v0.2.35</version>
 </dependency>
 <!-- Skija is a `provided` dependency of the engine; add the native bundle for your platform. -->
 <dependency>
@@ -81,17 +89,40 @@ Maven:
     <artifactId>skija-linux-x64</artifactId>
     <version>0.143.17</version>
 </dependency>
+</dependencies>
 ```
 
-Gradle:
+Gradle (`settings.gradle.kts`):
 
 ```kotlin
-implementation("io.github.timer-err:qml4j-core:0.2.34")
-// pick your platform: skija-linux-x64 / skija-windows-x64 / skija-macos-x64 / skija-macos-arm64
-runtimeOnly("io.github.humbleui:skija-linux-x64:0.143.17")
+dependencyResolutionManagement {
+    repositories {
+        mavenCentral()
+        exclusiveContent {
+            forRepository {
+                maven { url = uri("https://jitpack.io") }
+            }
+            filter {
+                includeGroup("com.github.TIMER-err.qml4j")
+            }
+        }
+    }
+}
+```
+
+Module dependencies (`build.gradle.kts`):
+
+```kotlin
+dependencies {
+    implementation("com.github.TIMER-err.qml4j:qml4j-core:v0.2.35")
+    // pick your platform: skija-linux-x64 / skija-windows-x64 / skija-macos-x64 / skija-macos-arm64
+    runtimeOnly("io.github.humbleui:skija-linux-x64:0.143.17")
+}
 ```
 
 The engine keeps Skija `provided` so you choose the platform-native artifact yourself; it transitively pulls in the ANTLR runtime, Rhino, ASM and ICU4J. Java 8+.
+
+Source builds with `mvn install` still use `io.github.timer-err:qml4j-core:0.2.35`. These local artifacts do not replace the JitPack coordinates above.
 
 ## Text wrapping
 
@@ -128,7 +159,7 @@ qml4j aims to be a fully native-Java path from QML source to pixels — a drop-i
 </p>
 
 <p align="center">
-  <a href="https://central.sonatype.com/artifact/io.github.timer-err/qml4j-core"><img src="https://img.shields.io/maven-central/v/io.github.timer-err/qml4j-core?label=Maven%20Central&color=7C6CF0" alt="Maven Central"></a>
+  <a href="https://jitpack.io/#TIMER-err/qml4j/v0.2.35"><img src="https://jitpack.io/v/TIMER-err/qml4j.svg" alt="JitPack"></a>
   <img src="https://img.shields.io/badge/desktop-Linux%20%E2%80%A2%20Windows-2BD46E" alt="Desktop">
   <img src="https://img.shields.io/badge/Android-D8%20%E2%86%92%20DEX-A4C639" alt="Android">
 </p>
