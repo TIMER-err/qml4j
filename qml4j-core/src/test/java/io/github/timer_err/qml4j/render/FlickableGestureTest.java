@@ -172,24 +172,76 @@ class FlickableGestureTest {
     }
 
     @Test
-    void touchSlopStillProtectsChildClicksAndHandoffKeepsDirectDragOneToOne() {
+    void subSlopMotionStillClicksTheChildWithoutScrollingOrFlinging() {
         QmlView view = scene(true);
         Flickable f = flickable(view);
         MouseArea child = (MouseArea) f.children.get(0);
-        int[] canceled = new int[1];
-        child.canceled.connect(() -> canceled[0]++);
+        int[] clicks = new int[1];
+        child.clicked.connect(() -> clicks[0]++);
         view.dispatchPointerDown(150f, 200f, INPUT_EPOCH);
         view.dispatchPointerMove(150f, 195f, INPUT_EPOCH + 10_000_000L);
         assertTrue(child.pressed.peek());
-        assertFalse(f.moving.peek());
-        assertEquals(800f, f.contentY.peekFloat());
-        view.dispatchPointerMove(150f, 180f, INPUT_EPOCH + 20_000_000L);
+        view.dispatchPointerUp(150f, 195f, INPUT_EPOCH + 20_000_000L);
+        assertEquals(1, clicks[0]);
         assertFalse(child.pressed.peek());
-        assertEquals(1, canceled[0]);
-        view.dispatchPointerMove(150f, 160f, INPUT_EPOCH + 40_000_000L);
-        assertEquals(820f, f.contentY.peekFloat(), "20 logical pixels after ownership transfers");
-        view.dispatchPointerCancel();
-        assertEquals(1, canceled[0], "cancel does not cancel the stolen child twice");
+        assertFalse(f.moving.peek());
+        view.tickAnimations(RENDER_EPOCH);
+        view.tickAnimations(RENDER_EPOCH + 2_000_000_000L);
+        assertEquals(800f, f.contentY.peekFloat());
+        view.dispose();
+    }
+
+    @Test
+    void childHandoffPreservesTheWholeGestureAndVelocityAtDifferentInputRates() {
+        for (int sampleMillis : new int[]{4, 8, 16, 33, 100}) {
+            QmlView view = scene(true);
+            try {
+                Flickable f = flickable(view);
+                MouseArea child = (MouseArea) f.children.get(0);
+                int[] events = new int[2];
+                child.canceled.connect(() -> events[0]++);
+                child.clicked.connect(() -> events[1]++);
+                flick(view, sampleMillis);
+                assertEquals(900f, f.contentY.peekFloat(),
+                        "crossing slop must retain the first movement, even in a single coalesced move");
+                assertFalse(child.pressed.peek());
+                assertEquals(1, events[0]);
+                assertEquals(0, events[1]);
+                assertTrue(f.moving.peek(), "handoff must retain the original input history");
+                view.tickAnimations(RENDER_EPOCH);
+                view.tickAnimations(RENDER_EPOCH + 2_000_000_000L);
+                assertEquals(900d + (1000d - 5d) / 4.2d, f.contentY.peekDouble(), 0.03d);
+                assertFalse(f.moving.peek());
+            } finally {
+                view.dispose();
+            }
+        }
+    }
+
+    @Test
+    void nestedAxisSelectionAppliesTheFirstMoveToTheSelectedViewport() {
+        for (boolean horizontal : new boolean[]{false, true}) {
+            QmlView view = QmlView.withStockTypes(new QmlEngine());
+            try {
+                Flickable outer = (Flickable) view.load("import QtQuick\n"
+                        + "Flickable { width: 300; height: 400; contentWidth: 300; contentHeight: 6000;"
+                        + " flickableDirection: \"VerticalFlick\"\n"
+                        + " Flickable { objectName: \"inner\"; width: 300; height: 400;"
+                        + " contentWidth: 2000; contentHeight: 400; flickableDirection: \"HorizontalFlick\" }\n"
+                        + "}");
+                Flickable inner = (Flickable) view.findByObjectName("inner");
+                view.dispatchPointerDown(200f, 200f, INPUT_EPOCH);
+                view.dispatchPointerMove(horizontal ? 50f : 200f, horizontal ? 200f : 50f,
+                        INPUT_EPOCH + 80_000_000L);
+                assertEquals(horizontal ? 150f : 0f, inner.contentX.peekFloat());
+                assertEquals(horizontal ? 0f : 150f, outer.contentY.peekFloat());
+                view.dispatchPointerCancel();
+                assertFalse(inner.moving.peek());
+                assertFalse(outer.moving.peek());
+            } finally {
+                view.dispose();
+            }
+        }
     }
 
     @Test

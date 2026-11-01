@@ -170,10 +170,10 @@ public class Flickable extends Item implements Animatable {
             if (allowX && flingVX != 0f) {
                 float nextV = (float) (flingVX * decay);
                 if (Math.abs(nextV) <= STOP_VELOCITY) {
-                    nx += (flingVX - Math.copySign(STOP_VELOCITY, flingVX)) / FRICTION;
+                    nx = (float) (nx + (flingVX - Math.copySign(STOP_VELOCITY, flingVX)) / FRICTION);
                     flingVX = 0f;
                 } else {
-                    nx += flingVX * (1d - decay) / FRICTION;
+                    nx = (float) (nx + flingVX * (1d - decay) / FRICTION);
                     flingVX = nextV;
                 }
                 nx = clamp(nx, 0f, mx);
@@ -184,10 +184,10 @@ public class Flickable extends Item implements Animatable {
             if (allowY && flingVY != 0f) {
                 float nextV = (float) (flingVY * decay);
                 if (Math.abs(nextV) <= STOP_VELOCITY) {
-                    ny += (flingVY - Math.copySign(STOP_VELOCITY, flingVY)) / FRICTION;
+                    ny = (float) (ny + (flingVY - Math.copySign(STOP_VELOCITY, flingVY)) / FRICTION);
                     flingVY = 0f;
                 } else {
-                    ny += flingVY * (1d - decay) / FRICTION;
+                    ny = (float) (ny + flingVY * (1d - decay) / FRICTION);
                     flingVY = nextV;
                 }
                 ny = clamp(ny, 0f, my);

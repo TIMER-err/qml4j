@@ -376,7 +376,7 @@ final class EventDispatcher {
         // Flickable takes the gesture immediately (it starts `moving` at press).
         if (pendingChain.isEmpty()) return false;
         if (pendingChain.size() == 1) {
-            beginScroll(pendingChain.get(0), x, y, eventTimeNanos);
+            beginScroll(pendingChain.get(0));
             return true;
         }
         return true;
@@ -401,18 +401,16 @@ final class EventDispatcher {
         return null;
     }
 
-    private void beginScroll(Flickable f, float x, float y, long eventTimeNanos) {
+    private void beginScroll(Flickable f) {
         pendingChain.clear();
         scrolling = f;
         f.moving.set(Boolean.TRUE);
-        captureRootX = x;
-        captureRootY = y;
         scrollStartContentX = f.contentX.peekFloat();
         scrollStartContentY = f.contentY.peekFloat();
-        scrollVelocity.reset(x, y, eventTimeNanos);
     }
 
     boolean dispatchPointerMove(float x, float y, long eventTimeNanos) {
+        if (!pendingChain.isEmpty()) scrollVelocity.add(x, y, eventTimeNanos);
         if (textCapturing != null) {
             extendTextSelection(x, y);
             return true;
@@ -438,7 +436,10 @@ final class EventDispatcher {
             // A press that landed on the Flickables themselves: start scrolling the
             // first one that moves along this gesture's axis.
             Flickable f = chooseFlickable(x, y, 0f);
-            if (f != null) beginScroll(f, x, y, eventTimeNanos);
+            if (f != null) {
+                beginScroll(f);
+                applyScroll(x, y, eventTimeNanos);
+            }
             return true;
         }
         return updateHover(x, y);
@@ -622,7 +623,7 @@ final class EventDispatcher {
         // press (e.g. Ripple's wave) never learns it ended and stays stuck.
         ma.canceled.emit();
         captured = null;
-        beginScroll(target, x, y, eventTimeNanos);
+        beginScroll(target);
         applyScroll(x, y, eventTimeNanos);
         return true;
     }

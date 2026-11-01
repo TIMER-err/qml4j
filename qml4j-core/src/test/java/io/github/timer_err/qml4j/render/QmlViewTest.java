@@ -1527,21 +1527,6 @@ class QmlViewTest {
         assertEquals(10f, ma.mouseY.peek().floatValue());
     }
 
-    @Test
-    void mouseAreaWinsOverFlickableScroll() {
-        QmlView v = newView();
-        Item root = v.load(
-            "Flickable {\n" +
-            "  width: 200; height: 100\n" +
-            "  contentWidth: 800; contentHeight: 400\n" +
-            "  MouseArea { id: ma; width: 200; height: 100 }\n" +
-            "}");
-        Flickable f = (Flickable) root;
-        v.dispatchPointerDown(50, 30);
-        v.dispatchPointerMove(10, 5);
-        assertEquals(0f, f.contentX.peek().floatValue());
-        assertEquals(0f, f.contentY.peek().floatValue());
-    }
 
     @Test
     void rectangleDefaultRadiusAndBorderZero() {
