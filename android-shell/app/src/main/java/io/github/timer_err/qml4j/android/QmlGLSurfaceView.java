@@ -39,6 +39,8 @@ public final class QmlGLSurfaceView extends GLSurfaceView {
     // Logical-pixel scale: QML is authored in dp; render at the screen density so
     // Material components are physically sized (and the canvas drawn larger).
     private final float uiScale;
+    // UI-thread state: secondary fingers never replace the stream's first pointer.
+    private int activeTouchPointerId = MotionEvent.INVALID_POINTER_ID;
 
     public QmlGLSurfaceView(Context ctx, QmlEngine engine, String qmlSource, ResourceLoader resources,
                             float uiScale) {
@@ -57,38 +59,78 @@ public final class QmlGLSurfaceView extends GLSurfaceView {
 
     @Override
     public boolean onTouchEvent(MotionEvent ev) {
-        final int action = ev.getActionMasked();
-        final float x = ev.getX() / uiScale;
-        final float y = ev.getY() / uiScale;
-        switch (action) {
-            case MotionEvent.ACTION_DOWN:
-                requestFocus();
-                queueEvent(new Runnable() {
-                    @Override public void run() {
-                        if (view == null) return;
-                        boolean hitTextEditable = view.pickTextEditable(x, y) != null;
-                        view.dispatchPointerDown(x, y);
-                        if (hitTextEditable) showImeOnUiThread();
+        int action = ev.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            activeTouchPointerId = ev.getPointerId(ev.getActionIndex());
+            requestFocus();
+        } else if (action == MotionEvent.ACTION_POINTER_DOWN) {
+            return true;
+        } else if (action == MotionEvent.ACTION_POINTER_UP) {
+            if (ev.getPointerId(ev.getActionIndex()) != activeTouchPointerId) return true;
+            action = MotionEvent.ACTION_UP;
+        } else if (action != MotionEvent.ACTION_MOVE && action != MotionEvent.ACTION_UP
+                && action != MotionEvent.ACTION_CANCEL) {
+            return false;
+        }
+        if (activeTouchPointerId == MotionEvent.INVALID_POINTER_ID) return true;
+        final int pointerIndex = ev.findPointerIndex(activeTouchPointerId);
+        if (pointerIndex < 0) action = MotionEvent.ACTION_CANCEL;
+        final int dispatchedAction = action;
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+            activeTouchPointerId = MotionEvent.INVALID_POINTER_ID;
+        }
+        // Own the complete batch until the GL thread finishes; never retain the
+        // framework event or allocate a runnable/coordinate array per sample.
+        final MotionEvent event = MotionEvent.obtain(ev);
+        queueEvent(new Runnable() {
+            @Override public void run() {
+                try {
+                    if (view == null) return;
+                    DirtyQueue dq = view.dirtyQueue();
+                    boolean ownBatch = DirtyQueue.current() != dq;
+                    if (ownBatch) dq.install();
+                    try {
+                        // Replay velocity history without reevaluating bindings
+                        // for every historical sample in the same MotionEvent.
+                        dispatchTouchEvent(event, pointerIndex, dispatchedAction);
+                    } finally {
+                        if (ownBatch) {
+                            try { dq.flush(); }
+                            finally { dq.uninstall(); }
+                        }
                     }
-                });
-                return true;
-            case MotionEvent.ACTION_MOVE:
-                queueEvent(new Runnable() {
-                    @Override public void run() {
-                        if (view != null) view.dispatchPointerMove(x, y);
-                    }
-                });
-                return true;
-            case MotionEvent.ACTION_UP:
-            case MotionEvent.ACTION_CANCEL:
-                queueEvent(new Runnable() {
-                    @Override public void run() {
-                        if (view != null) view.dispatchPointerUp(x, y);
-                    }
-                });
-                return true;
-            default:
-                return false;
+                } finally {
+                    event.recycle();
+                }
+            }
+        });
+        return true;
+    }
+
+    private void dispatchTouchEvent(MotionEvent event, int pointerIndex, int action) {
+        if (view == null) return;
+        if (action == MotionEvent.ACTION_CANCEL) {
+            view.dispatchPointerCancel();
+            return;
+        }
+        float x = event.getX(pointerIndex) / uiScale;
+        float y = event.getY(pointerIndex) / uiScale;
+        long eventTimeNanos = event.getEventTime() * 1_000_000L;
+        if (action == MotionEvent.ACTION_DOWN) {
+            boolean hitTextEditable = view.pickTextEditable(x, y) != null;
+            view.dispatchPointerDown(x, y, eventTimeNanos);
+            if (hitTextEditable) showImeOnUiThread();
+            return;
+        }
+        for (int i = 0; i < event.getHistorySize(); i++) {
+            view.dispatchPointerMove(event.getHistoricalX(pointerIndex, i) / uiScale,
+                    event.getHistoricalY(pointerIndex, i) / uiScale,
+                    event.getHistoricalEventTime(i) * 1_000_000L);
+        }
+        if (action == MotionEvent.ACTION_MOVE) {
+            view.dispatchPointerMove(x, y, eventTimeNanos);
+        } else if (action == MotionEvent.ACTION_UP) {
+            view.dispatchPointerUp(x, y, eventTimeNanos);
         }
     }
 

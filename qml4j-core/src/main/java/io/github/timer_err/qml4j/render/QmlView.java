@@ -229,27 +229,63 @@ public final class QmlView {
     }
 
     public boolean dispatchPointerDown(float x, float y) {
-        return batched(() -> events.dispatchPointerDown(x, y));
+        return dispatchPointerDown(x, y, System.nanoTime());
+    }
+
+    /** eventTimeNanos is the host's original monotonic input timestamp, in ns.
+     *  All samples of a gesture must use the same clock; it need not share the
+     *  render loop's epoch (Android uptime-based event times are supported). */
+    public boolean dispatchPointerDown(float x, float y, long eventTimeNanos) {
+        if (DirtyQueue.current() == dirtyQueue()) return events.dispatchPointerDown(x, y, eventTimeNanos);
+        return batched(() -> events.dispatchPointerDown(x, y, eventTimeNanos));
     }
 
     /** button is a Qt.MouseButton value: LeftButton=1, RightButton=2, MiddleButton=4. */
     @SuppressWarnings("unused") // host input API
     public boolean dispatchPointerDown(float x, float y, int button) {
-        return batched(() -> events.dispatchPointerDown(x, y, button));
+        return dispatchPointerDown(x, y, button, System.nanoTime());
+    }
+
+    public boolean dispatchPointerDown(float x, float y, int button, long eventTimeNanos) {
+        if (DirtyQueue.current() == dirtyQueue()) return events.dispatchPointerDown(x, y, button, eventTimeNanos);
+        return batched(() -> events.dispatchPointerDown(x, y, button, eventTimeNanos));
     }
 
     public boolean dispatchPointerMove(float x, float y) {
-        return batched(() -> events.dispatchPointerMove(x, y));
+        return dispatchPointerMove(x, y, System.nanoTime());
+    }
+
+    /** See dispatchPointerDown(float, float, long) for the input clock contract. */
+    public boolean dispatchPointerMove(float x, float y, long eventTimeNanos) {
+        if (DirtyQueue.current() == dirtyQueue()) return events.dispatchPointerMove(x, y, eventTimeNanos);
+        return batched(() -> events.dispatchPointerMove(x, y, eventTimeNanos));
     }
 
     public boolean dispatchPointerUp(float x, float y) {
-        return batched(() -> events.dispatchPointerUp(x, y));
+        return dispatchPointerUp(x, y, System.nanoTime());
+    }
+
+    /** See dispatchPointerDown(float, float, long) for the input clock contract. */
+    public boolean dispatchPointerUp(float x, float y, long eventTimeNanos) {
+        if (DirtyQueue.current() == dirtyQueue()) return events.dispatchPointerUp(x, y, eventTimeNanos);
+        return batched(() -> events.dispatchPointerUp(x, y, eventTimeNanos));
     }
 
     /** button is a Qt.MouseButton value: LeftButton=1, RightButton=2, MiddleButton=4. */
     @SuppressWarnings("unused") // host input API
     public boolean dispatchPointerUp(float x, float y, int button) {
-        return batched(() -> events.dispatchPointerUp(x, y, button));
+        return dispatchPointerUp(x, y, button, System.nanoTime());
+    }
+
+    public boolean dispatchPointerUp(float x, float y, int button, long eventTimeNanos) {
+        if (DirtyQueue.current() == dirtyQueue()) return events.dispatchPointerUp(x, y, button, eventTimeNanos);
+        return batched(() -> events.dispatchPointerUp(x, y, button, eventTimeNanos));
+    }
+
+    /** End pointer capture and scrolling without a click, release or new fling. */
+    public boolean dispatchPointerCancel() {
+        if (DirtyQueue.current() == dirtyQueue()) return events.dispatchPointerCancel();
+        return batched(events::dispatchPointerCancel);
     }
 
     public boolean dispatchWheel(float x, float y, float dx, float dy) {

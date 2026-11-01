@@ -36,6 +36,7 @@ final class EventDispatcher {
     private float dragStartX;
     private float dragStartY;
     private Flickable scrolling;
+    private Flickable releasedScroll;
     private float scrollStartContentX;
     private float scrollStartContentY;
     // The Flickables under the press, innermost first, eligible to take the gesture
@@ -44,18 +45,7 @@ final class EventDispatcher {
     // the innermost, so a drag picks the nearest ancestor that scrolls on the
     // gesture's axis -- a vertical drag over a horizontal TabRow scrolls the page.
     private final List<Flickable> pendingChain = new ArrayList<Flickable>(4);
-    // Windowed velocity tracker. The fling speed handed to the Flickable on release
-    // is the displacement across a short recent window of pointer samples, not a
-    // running EMA of per-move deltas: an EMA reversed direction when the finger
-    // rolled back a pixel or two on lift (its last sample dominated) and
-    // underestimated fast flicks when move events arrived in irregular bursts. A
-    // window over the last ~VEL_WINDOW seconds is robust to both.
-    private static final int VEL_SAMPLES = 8;
-    private static final float VEL_WINDOW = 0.09f; // seconds of history used for velocity
-    private final long[] sampleNanos = new long[VEL_SAMPLES];
-    private final float[] sampleX = new float[VEL_SAMPLES];
-    private final float[] sampleY = new float[VEL_SAMPLES];
-    private int sampleCount;
+    private final PointerVelocityTracker scrollVelocity = new PointerVelocityTracker();
 
     // Pixels of content moved per mouse-wheel notch (GLFW reports ~±1 per notch).
     private static final float WHEEL_STEP = 48f;
@@ -311,25 +301,35 @@ final class EventDispatcher {
     }
 
     boolean dispatchClick(float x, float y) {
-        return dispatchPointerDown(x, y) && dispatchPointerUp(x, y);
+        long now = System.nanoTime();
+        return dispatchPointerDown(x, y, MouseEvent.LEFT_BUTTON, now)
+            && dispatchPointerUp(x, y, MouseEvent.LEFT_BUTTON, now);
     }
 
     // Qt.MouseButton of the press currently being tracked; released/clicked and
     // positionChanged payloads carry it so handlers can route on mouse.button.
     private int pressButton = MouseEvent.LEFT_BUTTON;
 
-    boolean dispatchPointerDown(float x, float y) {
-        return dispatchPointerDown(x, y, MouseEvent.LEFT_BUTTON);
+    boolean dispatchPointerDown(float x, float y, long eventTimeNanos) {
+        return dispatchPointerDown(x, y, MouseEvent.LEFT_BUTTON, eventTimeNanos);
     }
 
     // button is a Qt.MouseButton value (LeftButton=1, RightButton=2, MiddleButton=4).
     // Only the left button drives text editing, buttons and flick-scrolling (Qt
     // semantics); any other button sees MouseAreas alone, and a MouseArea whose
     // acceptedButtons doesn't include the button is transparent to the press.
-    boolean dispatchPointerDown(float x, float y, int button) {
+    boolean dispatchPointerDown(float x, float y, int button, long eventTimeNanos) {
+        dispatchPointerCancel();
         if (root == null) return false;
         pressButton = button;
+        captureRootX = x;
+        captureRootY = y;
+        scrollVelocity.reset(x, y, eventTimeNanos);
         if (button == MouseEvent.LEFT_BUTTON) {
+            // Stop before delivering a child's pressed handler, including buttons
+            // and editors which do not themselves hand their press to scrolling.
+            hitTestFlickables(root, x, y, pendingChain);
+            for (int i = 0; i < pendingChain.size(); i++) pendingChain.get(i).stopScroll();
             TextEditable ti = hitTestTextEditable(root, x, y);
             if (ti != null) {
                 focus.setFocus((Item) ti);
@@ -338,12 +338,14 @@ final class EventDispatcher {
                 clearSelection(ti);
                 ti.setSelectionAnchor(idx);
                 ti.setCursorPosition(idx);
+                pendingChain.clear();
                 textCapturing = ti;
                 return true;
             }
             if (focus.focused() instanceof TextEditable) focus.clearFocus();
             AbstractButton btn = hitTestButton(root, x, y);
             if (btn != null) {
+                pendingChain.clear();
                 capturedButton = btn;
                 captureRootX = x;
                 captureRootY = y;
@@ -363,31 +365,20 @@ final class EventDispatcher {
             setContains(hit, true);
             hit.pressedSignal.emit(new MouseEvent(local[0], local[1], button, button, 0));
             beginDragIfRequested(hit);
-            // If the MouseArea isn't dragging its own target, remember the
-            // Flickables beneath it so a drag past threshold scrolls one of them.
-            // Only a left press may hand off to a flick-scroll.
-            pendingChain.clear();
-            if (button == MouseEvent.LEFT_BUTTON && dragTarget == null) {
-                hitTestFlickables(root, x, y, pendingChain);
-                for (int i = 0; i < pendingChain.size(); i++) pendingChain.get(i).stopScroll();
-            }
+            // A child with its own drag target owns this press; otherwise retain
+            // the stopped Flickable chain until the gesture crosses touch slop.
+            if (button != MouseEvent.LEFT_BUTTON || dragTarget != null) pendingChain.clear();
             return true;
         }
         if (button != MouseEvent.LEFT_BUTTON) return false;
         // Pressed straight onto a Flickable. With nested scrollers, which one moves
         // depends on the drag axis, so the choice waits for the first move; a lone
         // Flickable takes the gesture immediately (it starts `moving` at press).
-        pendingChain.clear();
-        hitTestFlickables(root, x, y, pendingChain);
         if (pendingChain.isEmpty()) return false;
-        for (int i = 0; i < pendingChain.size(); i++) pendingChain.get(i).stopScroll();
-        captureRootX = x;
-        captureRootY = y;
         if (pendingChain.size() == 1) {
-            beginScroll(pendingChain.get(0), x, y);
+            beginScroll(pendingChain.get(0), x, y, eventTimeNanos);
             return true;
         }
-        beginScrollVelocity(x, y);
         return true;
     }
 
@@ -410,7 +401,7 @@ final class EventDispatcher {
         return null;
     }
 
-    private void beginScroll(Flickable f, float x, float y) {
+    private void beginScroll(Flickable f, float x, float y, long eventTimeNanos) {
         pendingChain.clear();
         scrolling = f;
         f.moving.set(Boolean.TRUE);
@@ -418,16 +409,16 @@ final class EventDispatcher {
         captureRootY = y;
         scrollStartContentX = f.contentX.peekFloat();
         scrollStartContentY = f.contentY.peekFloat();
-        beginScrollVelocity(x, y);
+        scrollVelocity.reset(x, y, eventTimeNanos);
     }
 
-    boolean dispatchPointerMove(float x, float y) {
+    boolean dispatchPointerMove(float x, float y, long eventTimeNanos) {
         if (textCapturing != null) {
             extendTextSelection(x, y);
             return true;
         }
         if (captured != null) {
-            if (!pendingChain.isEmpty() && dragTarget == null && stealsToFlick(x, y)) {
+            if (!pendingChain.isEmpty() && dragTarget == null && stealsToFlick(x, y, eventTimeNanos)) {
                 return true;
             }
             float[] local = localCoords(captured, x, y);
@@ -440,14 +431,14 @@ final class EventDispatcher {
             return true;
         }
         if (scrolling != null) {
-            applyScroll(x, y);
+            applyScroll(x, y, eventTimeNanos);
             return true;
         }
         if (!pendingChain.isEmpty()) {
             // A press that landed on the Flickables themselves: start scrolling the
             // first one that moves along this gesture's axis.
             Flickable f = chooseFlickable(x, y, 0f);
-            if (f != null) beginScroll(f, x, y);
+            if (f != null) beginScroll(f, x, y, eventTimeNanos);
             return true;
         }
         return updateHover(x, y);
@@ -476,11 +467,11 @@ final class EventDispatcher {
             && local[1] <= ma.height.peekFloat();
     }
 
-    boolean dispatchPointerUp(float x, float y) {
-        return dispatchPointerUp(x, y, pressButton);
+    boolean dispatchPointerUp(float x, float y, long eventTimeNanos) {
+        return dispatchPointerUp(x, y, pressButton, eventTimeNanos);
     }
 
-    boolean dispatchPointerUp(float x, float y, int button) {
+    boolean dispatchPointerUp(float x, float y, int button, long eventTimeNanos) {
         if (textCapturing != null) {
             extendTextSelection(x, y);
             textCapturing = null;
@@ -516,12 +507,50 @@ final class EventDispatcher {
             return true;
         }
         if (scrolling != null) {
-            applyScroll(x, y);
-            scrolling.startFling(flingVelX(), flingVelY());
+            applyScroll(x, y, eventTimeNanos);
+            scrolling.startFling(-scrollVelocity.velocityX(), -scrollVelocity.velocityY());
+            releasedScroll = scrolling;
             scrolling = null;
+            scrollVelocity.clear();
             return true;
         }
-        return false;
+        boolean pending = !pendingChain.isEmpty();
+        pendingChain.clear();
+        scrollVelocity.clear();
+        return pending;
+    }
+
+    /** Cancel capture without synthesizing release/click or a release velocity. */
+    boolean dispatchPointerCancel() {
+        boolean handled = captured != null || capturedButton != null || textCapturing != null
+            || scrolling != null || !pendingChain.isEmpty()
+            || releasedScroll != null && Boolean.TRUE.equals(releasedScroll.moving.peek());
+        if (captured != null) {
+            MouseArea target = captured;
+            captured = null;
+            target.pressed.set(Boolean.FALSE);
+            setContains(target, false);
+            endDrag(target);
+            target.canceled.emit();
+        }
+        if (capturedButton != null) {
+            capturedButton.down.set(Boolean.FALSE);
+            capturedButton = null;
+        }
+        textCapturing = null;
+        if (scrolling != null) {
+            scrolling.stopScroll();
+            scrolling = null;
+        }
+        if (releasedScroll != null) {
+            releasedScroll.stopScroll();
+            releasedScroll = null;
+        }
+        for (int i = 0; i < pendingChain.size(); i++) pendingChain.get(i).stopScroll();
+        pendingChain.clear();
+        scrollVelocity.clear();
+        pressButton = MouseEvent.LEFT_BUTTON;
+        return handled;
     }
 
     private void extendTextSelection(float x, float y) {
@@ -576,7 +605,7 @@ final class EventDispatcher {
     // True once a captured MouseArea's drag passes the threshold along the
     // Flickable's scroll axis: cancels the MouseArea press (no click) and hands
     // the live gesture to the Flickable, so list rows stay tappable yet scroll.
-    private boolean stealsToFlick(float x, float y) {
+    private boolean stealsToFlick(float x, float y, long eventTimeNanos) {
         // Qt's MouseArea.preventStealing: a child that has claimed the gesture keeps
         // it for the rest of the press. Read live, so a control can open the door at
         // press time (letting a vertical flick scroll the page) and close it once it
@@ -593,60 +622,13 @@ final class EventDispatcher {
         // press (e.g. Ripple's wave) never learns it ended and stays stuck.
         ma.canceled.emit();
         captured = null;
-        beginScroll(target, x, y);
-        applyScroll(x, y);
+        beginScroll(target, x, y, eventTimeNanos);
+        applyScroll(x, y, eventTimeNanos);
         return true;
     }
 
-    // Begin (or restart) velocity tracking for a fresh drag at (x, y).
-    private void beginScrollVelocity(float x, float y) {
-        sampleCount = 0;
-        addScrollSample(x, y);
-    }
-
-    // Record a pointer sample (raw position + processing time) into the ring.
-    // arraycopy within one array shifts the ring buffer down one slot (memmove semantics --
-    // overlapping ranges are handled correctly); not a suspicious same-array copy.
-    @SuppressWarnings("SuspiciousSystemArraycopy")
-    private void addScrollSample(float x, float y) {
-        if (sampleCount == VEL_SAMPLES) {
-            System.arraycopy(sampleNanos, 1, sampleNanos, 0, VEL_SAMPLES - 1);
-            System.arraycopy(sampleX, 1, sampleX, 0, VEL_SAMPLES - 1);
-            System.arraycopy(sampleY, 1, sampleY, 0, VEL_SAMPLES - 1);
-            sampleCount--;
-        }
-        sampleNanos[sampleCount] = System.nanoTime();
-        sampleX[sampleCount] = x;
-        sampleY[sampleCount] = y;
-        sampleCount++;
-    }
-
-    private void trackScrollVelocity(float x, float y) {
-        addScrollSample(x, y);
-    }
-
-    // Content velocity (px/sec) = -(finger displacement)/(elapsed) measured from the
-    // newest sample back to the oldest sample still within VEL_WINDOW. Averaging over
-    // the window ignores a jittery final sample (no spurious reversal) and reflects
-    // the true flick speed even when individual moves were unevenly timed.
-    private float flingVelX() { return flingVel(sampleX); }
-    private float flingVelY() { return flingVel(sampleY); }
-
-    private float flingVel(float[] axis) {
-        if (sampleCount < 2) return 0f;
-        long newest = sampleNanos[sampleCount - 1];
-        int oldest = sampleCount - 1;
-        for (int i = sampleCount - 1; i >= 0; i--) {
-            if ((newest - sampleNanos[i]) / 1_000_000_000f > VEL_WINDOW) break;
-            oldest = i;
-        }
-        float dt = (newest - sampleNanos[oldest]) / 1_000_000_000f;
-        if (dt < 0.001f) return 0f;
-        return -(axis[sampleCount - 1] - axis[oldest]) / dt;
-    }
-
-    private void applyScroll(float rootX, float rootY) {
-        trackScrollVelocity(rootX, rootY);
+    private void applyScroll(float rootX, float rootY, long eventTimeNanos) {
+        scrollVelocity.add(rootX, rootY, eventTimeNanos);
         Flickable f = scrolling;
         String dir = f.flickableDirection.peek();
         boolean allowX = !"VerticalFlick".equals(dir);
@@ -660,8 +642,8 @@ final class EventDispatcher {
         // brought fully into view.
         float maxX = Math.max(0f, cw + f.rightMargin.peekFloat() - w);
         float maxY = Math.max(0f, ch + f.bottomMargin.peekFloat() - h);
-        // Drag tracks the finger 1:1 (responsive); the eased glide is only the
-        // release inertia. Keep the fling target in step via syncTarget.
+        // Drag tracks the finger 1:1; syncTarget prevents any stale animation from
+        // taking the displayed position back after this direct write.
         if (allowX) {
             f.contentX.setPaintOnly(clamp(scrollStartContentX - (rootX - captureRootX), 0f, maxX));
         }
@@ -669,6 +651,7 @@ final class EventDispatcher {
             f.contentY.setPaintOnly(clamp(scrollStartContentY - (rootY - captureRootY), 0f, maxY));
         }
         f.syncTarget();
+        f.moving.set(Boolean.TRUE);
     }
 
     // Mouse wheel at (x, y): dx/dy are wheel offsets (GLFW convention, +y = scroll up).
@@ -694,22 +677,24 @@ final class EventDispatcher {
     // Scrolls f on the wheel's own axes. False when it has no room there, which lets
     // dispatchWheel continue up the chain.
     private boolean wheelOnAxis(Flickable f, float dx, float dy) {
-        boolean scrolled = false;
-        if (dy != 0f && allowY(f) && maxY(f) > 0f) {
+        boolean canY = dy != 0f && allowY(f) && maxY(f) > 0f;
+        boolean canX = dx != 0f && allowX(f) && maxX(f) > 0f;
+        if (!canX && !canY) return false;
+        f.stopScroll();
+        if (canY) {
             f.contentY.setPaintOnly(clamp(f.contentY.peekFloat() - dy * WHEEL_STEP, 0f, maxY(f)));
-            scrolled = true;
         }
-        if (dx != 0f && allowX(f) && maxX(f) > 0f) {
+        if (canX) {
             f.contentX.setPaintOnly(clamp(f.contentX.peekFloat() - dx * WHEEL_STEP, 0f, maxX(f)));
-            scrolled = true;
         }
-        if (scrolled) f.syncTarget();
-        return scrolled;
+        f.syncTarget();
+        return true;
     }
 
     // Maps a vertical notch onto a horizontal-only list's X axis.
     private boolean wheelCrossAxis(Flickable f, float dy) {
         if (dy == 0f || !allowX(f) || maxX(f) <= 0f) return false;
+        f.stopScroll();
         f.contentX.setPaintOnly(clamp(f.contentX.peekFloat() - dy * WHEEL_STEP, 0f, maxX(f)));
         f.syncTarget();
         return true;

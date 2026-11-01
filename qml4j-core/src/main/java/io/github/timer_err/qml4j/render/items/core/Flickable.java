@@ -26,11 +26,8 @@ public class Flickable extends Item implements Animatable {
     @SuppressWarnings("unused")
     public final Property<Number> pressDelay = new Property<>(0);
 
-    // --- Eased scrolling + fling -----------------------------------------
-    // Drag/wheel/fling set a target position; the shown contentX/Y eases toward
-    // it each frame (a smoothing layer over the raw input). On release the
-    // residual velocity keeps advancing the target (inertia). Stepped by tick()
-    // since Flickable is Animatable and the render loop walks those.
+    // Programmatic targets ease independently; a fling integrates its displayed
+    // position directly, so release does not introduce a second catch-up animation.
     private float targetX;
     private float targetY;
     private boolean smoothing;
@@ -38,9 +35,13 @@ public class Flickable extends Item implements Animatable {
     private float flingVY;
     private boolean flinging;
     private long lastNanos;
-    private static final float DECEL = 2200f;    // px/s^2
-    private static final float MIN_FLING = 50f;  // px/s
-    private static final float EASE = 18f;       // higher = snappier follow
+    private boolean clockStarted;
+    // AndroidX FlingAnimation's default exponential friction, in seconds^-1.
+    private static final double FRICTION = 4.2;
+    private static final float MIN_FLING = 50f; // logical px/s at release
+    private static final float STOP_VELOCITY = 5f;
+    private static final float MAX_FLING = 8000f;
+    private static final float EASE = 18f;
 
     public Flickable() {
         // When the content shrinks (a collapsed section) or the viewport resizes, the
@@ -65,6 +66,13 @@ public class Flickable extends Item implements Animatable {
         if (ncy != cy) contentY.setPaintOnly(ncy);
         targetX = clamp(targetX, 0f, mx);
         targetY = clamp(targetY, 0f, my);
+        if (flinging) {
+            if (ncx <= 0f && flingVX < 0f || ncx >= mx && flingVX > 0f) flingVX = 0f;
+            if (ncy <= 0f && flingVY < 0f || ncy >= my && flingVY > 0f) flingVY = 0f;
+            if (flingVX == 0f && flingVY == 0f) stopScroll();
+        } else if (smoothing && targetX == ncx && targetY == ncy) {
+            stopScroll();
+        }
     }
 
     private float maxX() {
@@ -77,9 +85,13 @@ public class Flickable extends Item implements Animatable {
 
     /** Set the absolute scroll target (clamped); content eases toward it. */
     public void setScrollTarget(float x, float y) {
-        targetX = clamp(x, 0f, maxX());
-        targetY = clamp(y, 0f, maxY());
-        smoothing = true;
+        if (flinging) stopScroll();
+        targetX = allowX() ? clamp(x, 0f, maxX()) : contentX.peekFloat();
+        targetY = allowY() ? clamp(y, 0f, maxY()) : contentY.peekFloat();
+        smoothing = targetX != contentX.peekFloat() || targetY != contentY.peekFloat();
+        // Retarget an active ease without restarting its clock on every input.
+        if (smoothing) moving.set(Boolean.TRUE);
+        else stopScroll();
     }
 
     /** Adjust the target by a delta (wheel notches accumulate before the ease catches up). */
@@ -88,33 +100,39 @@ public class Flickable extends Item implements Animatable {
         setScrollTarget(targetX + dx, targetY + dy);
     }
 
-    /** Pin the target to the current (instantly-set) content position. Drag and
-     *  wheel set contentX/Y directly for a 1:1 feel; this keeps the eased target
-     *  in step so a following fling coasts from the right place. */
+    /** Take over at an instantly written content position, discarding any old
+     *  fling or eased target. A live direct drag keeps its moving state. */
     public void syncTarget() {
+        boolean animated = smoothing || flinging;
+        smoothing = false;
+        flinging = false;
+        flingVX = 0f;
+        flingVY = 0f;
+        lastNanos = 0L;
+        clockStarted = false;
         targetX = contentX.peekFloat();
         targetY = contentY.peekFloat();
+        if (animated) moving.set(Boolean.FALSE);
     }
 
-    /** A fresh touch: drop any coast and pin the target to where we are now. */
+    /** Stop all scrolling at the displayed position, including its animation clock. */
     public void stopScroll() {
-        flinging = false;
-        smoothing = false;
         syncTarget();
+        moving.set(Boolean.FALSE);
     }
 
     @SuppressWarnings("unused")
     public void stopFling() {
-        flinging = false;
+        stopScroll();
     }
 
-    /** Release velocity (content px/sec) that keeps advancing the target; the
-     *  shown position eases after it (the smooth inertial glide). */
+    /** Release velocity in logical content px/s; input timestamps are deliberately
+     *  not used here because the render clock can have a different monotonic epoch. */
     public void startFling(float vx, float vy) {
-        flingVX = vx;
-        flingVY = vy;
-        flinging = Math.abs(vx) > MIN_FLING || Math.abs(vy) > MIN_FLING;
-        smoothing = flinging;
+        stopScroll();
+        flingVX = allowX() ? releaseVelocity(vx, contentX.peekFloat(), maxX()) : 0f;
+        flingVY = allowY() ? releaseVelocity(vy, contentY.peekFloat(), maxY()) : 0f;
+        flinging = flingVX != 0f || flingVY != 0f;
         moving.set(flinging);
     }
 
@@ -131,58 +149,85 @@ public class Flickable extends Item implements Animatable {
     @Override
     public void tick(long nowNanos) {
         if (!smoothing && !flinging) return;
-        if (lastNanos == 0L) {
+        if (!clockStarted) {
             lastNanos = nowNanos;
+            clockStarted = true;
             return;
         }
-        float dt = (nowNanos - lastNanos) / 1_000_000_000f;
+        if (nowNanos <= lastNanos) return;
+        double dt = (nowNanos - lastNanos) / 1_000_000_000d;
         lastNanos = nowNanos;
-        if (dt <= 0f) return;
-        if (dt > 0.05f) dt = 0.05f;
 
-        String dir = flickableDirection.peek();
-        boolean allowX = !"VerticalFlick".equals(dir);
-        boolean allowY = !"HorizontalFlick".equals(dir);
+        boolean allowX = allowX(), allowY = allowY();
         float mx = maxX(), my = maxY();
-
-        // Inertia advances the target; hitting an edge kills that axis.
+        float cx = contentX.peekFloat(), cy = contentY.peekFloat();
         if (flinging) {
+            // Exact exponential integration, with no frame-duration cap. Finish at
+            // the exact velocity threshold even when a frame crosses it, making
+            // both long frames and different refresh rates travel the same distance.
+            double decay = Math.exp(-FRICTION * dt);
+            float nx = cx, ny = cy;
             if (allowX && flingVX != 0f) {
-                targetX = clamp(targetX + flingVX * dt, 0f, mx);
-                flingVX = (targetX <= 0f || targetX >= mx) ? 0f : decay(flingVX, dt);
+                float nextV = (float) (flingVX * decay);
+                if (Math.abs(nextV) <= STOP_VELOCITY) {
+                    nx += (flingVX - Math.copySign(STOP_VELOCITY, flingVX)) / FRICTION;
+                    flingVX = 0f;
+                } else {
+                    nx += flingVX * (1d - decay) / FRICTION;
+                    flingVX = nextV;
+                }
+                nx = clamp(nx, 0f, mx);
+                if (nx <= 0f || nx >= mx) flingVX = 0f;
+            } else {
+                flingVX = 0f;
             }
             if (allowY && flingVY != 0f) {
-                targetY = clamp(targetY + flingVY * dt, 0f, my);
-                flingVY = (targetY <= 0f || targetY >= my) ? 0f : decay(flingVY, dt);
+                float nextV = (float) (flingVY * decay);
+                if (Math.abs(nextV) <= STOP_VELOCITY) {
+                    ny += (flingVY - Math.copySign(STOP_VELOCITY, flingVY)) / FRICTION;
+                    flingVY = 0f;
+                } else {
+                    ny += flingVY * (1d - decay) / FRICTION;
+                    flingVY = nextV;
+                }
+                ny = clamp(ny, 0f, my);
+                if (ny <= 0f || ny >= my) flingVY = 0f;
+            } else {
+                flingVY = 0f;
             }
-            if (Math.abs(flingVX) < MIN_FLING && Math.abs(flingVY) < MIN_FLING) {
-                flinging = false;
-            }
+            contentX.setPaintOnly(nx);
+            contentY.setPaintOnly(ny);
+            targetX = nx;
+            targetY = ny;
+            if (flingVX == 0f && flingVY == 0f) stopScroll();
+            return;
         }
 
-        // Ease the shown position toward the target (frame-rate independent).
-        float a = 1f - (float) Math.exp(-EASE * dt);
-        float cx = contentX.peekFloat();
-        float cy = contentY.peekFloat();
+        targetX = allowX ? clamp(targetX, 0f, mx) : cx;
+        targetY = allowY ? clamp(targetY, 0f, my) : cy;
+        float a = (float) -Math.expm1(-EASE * dt);
         float nx = cx + (targetX - cx) * a;
         float ny = cy + (targetY - cy) * a;
         if (Math.abs(targetX - nx) < 0.25f) nx = targetX;
         if (Math.abs(targetY - ny) < 0.25f) ny = targetY;
-        // Paint-only: a scroll offset is a draw-time translate, so it must not force
-        // a relayout -- dependents still react, but a pure scroll keeps the fast path.
-        if (allowX) contentX.setPaintOnly(nx);
-        if (allowY) contentY.setPaintOnly(ny);
-
-        if (!flinging && nx == targetX && ny == targetY) {
-            smoothing = false;
-            moving.set(Boolean.FALSE);
-        }
+        // Scroll offsets are draw-time translates: preserve the layout fast path.
+        contentX.setPaintOnly(nx);
+        contentY.setPaintOnly(ny);
+        if (nx == targetX && ny == targetY) stopScroll();
     }
 
-    private static float decay(float v, float dt) {
-        float d = DECEL * dt;
-        if (v > 0f) return Math.max(0f, v - d);
-        return Math.min(0f, v + d);
+    private boolean allowX() {
+        return !"VerticalFlick".equals(flickableDirection.peek());
+    }
+
+    private boolean allowY() {
+        return !"HorizontalFlick".equals(flickableDirection.peek());
+    }
+
+    private static float releaseVelocity(float velocity, float position, float max) {
+        if (!Float.isFinite(velocity) || Math.abs(velocity) < MIN_FLING) return 0f;
+        if (position <= 0f && velocity < 0f || position >= max && velocity > 0f) return 0f;
+        return clamp(velocity, -MAX_FLING, MAX_FLING);
     }
 
     private static float clamp(float v, float lo, float hi) {
