@@ -17,10 +17,14 @@ public final class PointerVelocityTracker {
     private int size;
     private long lastMotionX;
     private long lastMotionY;
+    private long queryTimeNanos;
 
     public void clear() {
         next = 0;
         size = 0;
+        lastMotionX = 0L;
+        lastMotionY = 0L;
+        queryTimeNanos = 0L;
     }
 
     public void reset(float x, float y, long eventTimeNanos) {
@@ -35,10 +39,10 @@ public final class PointerVelocityTracker {
             long gap = eventTimeNanos - times[last];
             // Coalesced duplicate times have no measurable velocity. A backwards
             // clock or a long pause starts a new history rather than a huge slope.
-            if (gap == 0L) return;
-            if (gap < 0L || gap > WINDOW_NANOS) {
+            if (eventTimeNanos < queryTimeNanos || gap > WINDOW_NANOS) {
                 clear();
             } else {
+                if (gap == 0L) return;
                 if (x != xs[last]) lastMotionX = eventTimeNanos;
                 if (y != ys[last]) lastMotionY = eventTimeNanos;
             }
@@ -47,11 +51,20 @@ public final class PointerVelocityTracker {
             lastMotionX = eventTimeNanos;
             lastMotionY = eventTimeNanos;
         }
+        queryTimeNanos = eventTimeNanos;
         times[next] = eventTimeNanos;
         xs[next] = x;
         ys[next] = y;
         next = (next + 1) % CAPACITY;
         if (size < CAPACITY) size++;
+    }
+
+    /** Advance the query clock without adding a terminal pointer position.
+     *  Each axis stops after 80 ms without motion, including time until release.
+     *  A backwards event time discards the history. */
+    public void release(long eventTimeNanos) {
+        if (size > 0 && eventTimeNanos < queryTimeNanos) clear();
+        queryTimeNanos = eventTimeNanos;
     }
 
     public float velocityX() {
@@ -71,14 +84,14 @@ public final class PointerVelocityTracker {
         if (size < 2) return 0f;
         int newestIndex = index(0);
         long newest = times[newestIndex];
-        if (newest - lastMotion >= STOPPED_NANOS) return 0f;
+        if (queryTimeNanos - lastMotion >= STOPPED_NANOS) return 0f;
         int oldest = 0;
         for (int age = 1; age < size; age++) {
             if (newest - times[index(age)] > WINDOW_NANOS) break;
             oldest = age;
         }
 
-        // A meaningful reversal starts a new directional segment. Sub-pixel lift
+        // A meaningful reversal starts a new directional segment. Small MOVE
         // jitter does not erase the drag, but a deliberate reversal must not fling
         // in the direction from before the turn.
         float latest = axis[newestIndex];

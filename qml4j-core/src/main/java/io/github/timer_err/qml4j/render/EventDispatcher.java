@@ -508,7 +508,7 @@ final class EventDispatcher {
             return true;
         }
         if (scrolling != null) {
-            applyScroll(x, y, eventTimeNanos);
+            scrollVelocity.release(eventTimeNanos);
             scrolling.startFling(-scrollVelocity.velocityX(), -scrollVelocity.velocityY());
             releasedScroll = scrolling;
             scrolling = null;

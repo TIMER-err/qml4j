@@ -6,7 +6,7 @@
 
     <groupId>io.github.timer-err</groupId>
     <artifactId>qml4j-parent</artifactId>
-    <version>0.2.37</version>
+    <version>0.2.38</version>
     <packaging>pom</packaging>
 
     <name>qml4j</name>

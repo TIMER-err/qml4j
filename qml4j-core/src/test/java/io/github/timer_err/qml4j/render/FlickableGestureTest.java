@@ -94,6 +94,87 @@ class FlickableGestureTest {
     }
 
     @Test
+    void androidTerminalCoordinateRollbackAtHighInputRatesDoesNotMoveOrStopTheFling() {
+        // Captured Android coordinates and terminal delays; the second older
+        // timestamp and the preceding regular samples are synthetic.
+        // UP repeats the older position, not the last MOVE.
+        float[][] tails = {{540.7292f, 573.1084f}, {458.45834f, 481.87564f}};
+        for (int hz : new int[] {120, 240}) {
+            for (int trace = 0; trace < tails.length; trace++) {
+                QmlView view = scene(false);
+                try {
+                    Flickable f = flickable(view);
+                    f.height.set(800f);
+                    long olderTime = trace == 0 ? 32_000_000L : 30_000_000L;
+                    long lastMoveTime = trace == 0 ? 36_000_000L : 35_000_000L;
+                    float olderY = tails[trace][0];
+                    float lastY = tails[trace][1];
+                    double speed = (lastY - olderY) * 1_000_000_000d / (lastMoveTime - olderTime);
+                    float startY = (float) (olderY - speed * olderTime / 1_000_000_000d);
+                    assertTrue(view.dispatchPointerDown(150f, startY, INPUT_EPOCH));
+                    for (int sample = 1; ; sample++) {
+                        long elapsed = 1_000_000_000L * sample / hz;
+                        if (elapsed >= olderTime) break;
+                        view.dispatchPointerMove(150f, (float) (startY + speed * elapsed / 1_000_000_000d),
+                            INPUT_EPOCH + elapsed);
+                    }
+                    view.dispatchPointerMove(150f, olderY, INPUT_EPOCH + olderTime);
+                    view.dispatchPointerMove(150f, lastY, INPUT_EPOCH + lastMoveTime);
+                    float released = f.contentY.peekFloat();
+                    assertEquals(800f - (lastY - startY), released, 0.001f);
+                    assertTrue(view.dispatchPointerUp(150f, olderY, INPUT_EPOCH + 40_000_000L));
+                    assertEquals(released, f.contentY.peekFloat(), "UP cannot roll the drag position back");
+                    assertTrue(f.moving.peek(), "terminal rollback must preserve the fast MOVE velocity");
+                    view.tickAnimations(RENDER_EPOCH);
+                    view.tickAnimations(RENDER_EPOCH + 16_000_000L);
+                    assertTrue(f.contentY.peekFloat() < released, "fling must continue in the MOVE direction");
+                } finally {
+                    view.dispose();
+                }
+            }
+        }
+    }
+
+    @Test
+    void terminalPauseUsesTheStopThresholdWithoutApplyingTheUpPosition() {
+        for (long pause : new long[] {79_999_999L, 80_000_000L, 500_000_000L}) {
+            QmlView view = scene(false);
+            try {
+                Flickable f = flickable(view);
+                view.dispatchPointerDown(150f, 300f, INPUT_EPOCH);
+                view.dispatchPointerMove(150f, 200f, INPUT_EPOCH + 100_000_000L);
+                view.dispatchPointerUp(150f, 300f, INPUT_EPOCH + 100_000_000L + pause);
+                assertEquals(900f, f.contentY.peekFloat(), "terminal coordinates are not drag motion");
+                assertEquals(Boolean.valueOf(pause < 80_000_000L), f.moving.peek());
+                view.tickAnimations(RENDER_EPOCH);
+                view.tickAnimations(RENDER_EPOCH + 100_000_000L);
+                if (pause < 80_000_000L) assertTrue(f.contentY.peekFloat() > 900f);
+                else assertEquals(900f, f.contentY.peekFloat());
+            } finally {
+                view.dispose();
+            }
+        }
+    }
+
+    @Test
+    void backwardsReleaseTimeStopsWithoutApplyingTheUpPosition() {
+        QmlView view = scene(false);
+        try {
+            Flickable f = flickable(view);
+            view.dispatchPointerDown(150f, 300f, INPUT_EPOCH);
+            view.dispatchPointerMove(150f, 200f, INPUT_EPOCH + 100_000_000L);
+            view.dispatchPointerUp(150f, 250f, INPUT_EPOCH + 99_000_000L);
+            assertEquals(900f, f.contentY.peekFloat());
+            assertFalse(f.moving.peek());
+            view.tickAnimations(RENDER_EPOCH);
+            view.tickAnimations(RENDER_EPOCH + 100_000_000L);
+            assertEquals(900f, f.contentY.peekFloat());
+        } finally {
+            view.dispose();
+        }
+    }
+
+    @Test
     void aReversedGestureNeverCoastsInTheOldDirection() {
         QmlView view = scene(false);
         Flickable f = flickable(view);
@@ -102,7 +183,8 @@ class FlickableGestureTest {
         view.dispatchPointerMove(150f, 200f, INPUT_EPOCH + 100_000_000L);
         view.dispatchPointerMove(150f, 210f, INPUT_EPOCH + 110_000_000L);
         view.dispatchPointerMove(150f, 220f, INPUT_EPOCH + 120_000_000L);
-        view.dispatchPointerUp(150f, 230f, INPUT_EPOCH + 130_000_000L);
+        view.dispatchPointerMove(150f, 230f, INPUT_EPOCH + 130_000_000L);
+        view.dispatchPointerUp(150f, 230f, INPUT_EPOCH + 134_000_000L);
         assertEquals(870f, f.contentY.peekFloat());
         view.tickAnimations(RENDER_EPOCH);
         float previous = f.contentY.peekFloat();
