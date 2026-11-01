@@ -1,0 +1,32 @@
+{
+  "reflection": [
+    {
+      "type": "com.ibm.icu.text.BreakIteratorFactory",
+      "methods": [{ "name": "<init>", "parameterTypes": [] }]
+    },
+    {
+      "type": "java.util.Locale$Category"
+    },
+    {
+      "type": "java.lang.Enum",
+      "methods": [{ "name": "name", "parameterTypes": [] }]
+    },
+    {
+      "type": "java.util.Locale",
+      "methods": [
+        { "name": "getDefault", "parameterTypes": ["java.util.Locale$Category"] },
+        { "name": "setDefault", "parameterTypes": ["java.util.Locale$Category", "java.util.Locale"] }
+      ]
+    }
+  ],
+  "resources": [
+    { "glob": "com/ibm/icu/ICUConfig.properties" },
+    { "glob": "com/ibm/icu/impl/data/icudata/brkitr/**" },
+    { "glob": "com/ibm/icu/impl/data/icudata/uprops.icu" },
+    { "glob": "com/ibm/icu/impl/data/icudata/ulayout.icu" },
+    { "glob": "com/ibm/icu/impl/data/icudata/pnames.icu" },
+    { "glob": "com/ibm/icu/impl/data/icudata/*.nrm" },
+    { "glob": "com/ibm/icu/impl/data/icudata/langInfo.res" },
+    { "glob": "com/ibm/icu/impl/data/icudata/keyTypeData.res" }
+  ]
+}

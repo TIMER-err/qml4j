@@ -1,7 +1,8 @@
 target/
 *.class
 *.iml
-.idea/
+.idea/*
+!.idea/misc.xml
 .vscode/
 .classpath
 .project

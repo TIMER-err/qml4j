@@ -13,7 +13,11 @@ import java.util.Map;
  */
 public final class CompiledScene {
 
-    /** Bump when persisted fields or their runtime meaning changes. */
+    /**
+     * Persisted scene schema, independent of the host's resource fingerprint.
+     * Hosts store this value with scene metadata and reject unsupported versions
+     * before restoring classes. Bump when persisted fields or their meaning changes.
+     */
     public static final int FORMAT_VERSION = 1;
 
     private final String rootClassName;

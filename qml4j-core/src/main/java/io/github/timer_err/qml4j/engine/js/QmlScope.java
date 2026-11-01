@@ -140,7 +140,7 @@ public final class QmlScope implements Scriptable {
         // the captured component root when the parent walk can't reach it -- a reparented
         // overlay (DatePicker/Menu pop onto the scene root) detaches the delegate from the
         // component, so the parent chain no longer finds the root's functions.
-        if (root != null && JsWrap.isCallable(root, name, this)) {
+        if (JsWrap.isCallable(root, name, this)) {
             return new JsWrap.BoundMethod(root, name, this);
         }
         Object s = singleton(name);
@@ -216,7 +216,7 @@ public final class QmlScope implements Scriptable {
                 || sceneIds.contains(name)
                 || (root != null && root != outer && MemberAccess.hasMember(root, name))
                 || DelegateScope.delegateCallableOwner(outer, name) != null
-                || (root != null && JsWrap.isCallable(root, name, this))
+                || JsWrap.isCallable(root, name, this)
                 || singletonClasses.containsKey(name)
                 || changedSignal(name) != null;
         }

@@ -26,10 +26,6 @@ public final class QtGlobals {
 
     private QtGlobals() {}
 
-    public static Scriptable build(Context cx) {
-        return build(cx, false);
-    }
-
     public static Scriptable build(Context cx, boolean safeStandardObjects) {
         ScriptableObject scope = safeStandardObjects
                 ? cx.initSafeStandardObjects()

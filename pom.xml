@@ -6,7 +6,7 @@
 
     <groupId>io.github.timer-err</groupId>
     <artifactId>qml4j-parent</artifactId>
-    <version>0.2.32</version>
+    <version>0.2.34</version>
     <packaging>pom</packaging>
 
     <name>qml4j</name>
@@ -46,7 +46,6 @@
         <skija.version>0.143.17</skija.version>
         <antlr.version>4.13.2</antlr.version>
         <asm.version>9.7</asm.version>
-        <r8.version>8.13.17</r8.version>
         <junit.version>5.10.3</junit.version>
         <lwjgl.version>3.3.3</lwjgl.version>
         <lwjgl.natives>natives-linux</lwjgl.natives>
@@ -73,11 +72,6 @@
             <dependency>
                 <groupId>org.ow2.asm</groupId>
                 <artifactId>asm</artifactId>
-                <version>${asm.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.ow2.asm</groupId>
-                <artifactId>asm-util</artifactId>
                 <version>${asm.version}</version>
             </dependency>
             <dependency>

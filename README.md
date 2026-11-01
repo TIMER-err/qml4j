@@ -51,6 +51,11 @@ QmlView pluginView = new QmlView(engine, StockTypes.safeRegistry())
     .context("plugin", safeBridge);
 ```
 
+`networkPolicy` checks the initial remote Image URL and each redirect target before
+opening a connection. A denied URL produces `Image.Error`; approved images still
+load and decode normally. Each JavaScript realm initializes its globals once under
+a private lock. Separate realms do not share initialization locks.
+
 Or run a whole QML project from disk, quickshell-style — point the desktop host at a directory and an entry file:
 
 ```sh
@@ -68,7 +73,7 @@ Maven:
 <dependency>
     <groupId>io.github.timer-err</groupId>
     <artifactId>qml4j-core</artifactId>
-    <version>0.1.1</version>
+    <version>0.2.34</version>
 </dependency>
 <!-- Skija is a `provided` dependency of the engine; add the native bundle for your platform. -->
 <dependency>
@@ -81,12 +86,30 @@ Maven:
 Gradle:
 
 ```kotlin
-implementation("io.github.timer-err:qml4j-core:0.1.1")
+implementation("io.github.timer-err:qml4j-core:0.2.34")
 // pick your platform: skija-linux-x64 / skija-windows-x64 / skija-macos-x64 / skija-macos-arm64
 runtimeOnly("io.github.humbleui:skija-linux-x64:0.143.17")
 ```
 
-The engine keeps Skija `provided` so you choose the platform-native artifact yourself; it transitively pulls in the ANTLR runtime, Rhino and ASM. Java 8+.
+The engine keeps Skija `provided` so you choose the platform-native artifact yourself; it transitively pulls in the ANTLR runtime, Rhino, ASM and ICU4J. Java 8+.
+
+## Text wrapping
+
+Text wrapping uses ICU4J 77.1, the Java 8-compatible ICU release, for strict
+[Unicode line-break opportunities (UAX #14)](https://www.unicode.org/reports/tr14/)
+and [extended grapheme clusters (UAX #29)](https://www.unicode.org/reports/tr29/).
+`WordWrap` preserves words; `Wrap` uses grapheme-safe long-word fallback while retaining
+punctuation and non-breaking glue. `WrapAnywhere` may break at any extended grapheme,
+never inside a surrogate pair, combining sequence, flag or emoji ZWJ sequence.
+CRLF and Unicode hard separators preserve empty lines and original UTF-16 offsets.
+An indivisible unit wider than the box overflows instead of losing or splitting text.
+
+`UnicodeBreaks.analyze(text)` exposes the same boundaries to host-drawn text such as
+timed lyrics. Its emergency boundaries additionally keep orthographic conjuncts intact.
+Boundary iterators are reused per thread and release their text references after analysis.
+Analysis belongs in layout caches, not playback-frame loops. The engine jar includes
+the ICU boundary resources and dynamic-factory metadata required by GraalVM Native Image.
+
 
 ## Why
 

@@ -76,7 +76,7 @@ dependencies {
     skijaNative("io.github.humbleui:skija-android-arm64:0.143.17")
 
     // mavenLocal first (settings.gradle.kts): `mvn -pl qml4j-core install` wins over Central.
-    implementation("io.github.timer-err:qml4j-core:0.2.32")
+    implementation("io.github.timer-err:qml4j-core:0.2.34")
 
     implementation("io.github.humbleui:skija-shared:0.143.17")
     implementation("io.github.humbleui:skija-android-arm64:0.143.17")

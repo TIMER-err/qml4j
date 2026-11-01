@@ -68,10 +68,30 @@ public final class JsRuntime {
      */
     public static final class Realm {
         private final boolean safeStandardObjects;
+        private final Object initializationLock = new Object();
         private volatile Scriptable globals;
 
         public Realm(boolean safeStandardObjects) {
             this.safeStandardObjects = safeStandardObjects;
+        }
+
+        private Scriptable initializeGlobals() {
+            Scriptable initialized = globals;
+            if (initialized != null) return initialized;
+            synchronized (initializationLock) {
+                if (globals == null) {
+                    Context cx = enter(safeStandardObjects);
+                    try {
+                        initialized = QtGlobals.build(cx, safeStandardObjects);
+                        // Register safety before publishing the scope to other threads.
+                        if (safeStandardObjects) SAFE_GLOBALS.add(initialized);
+                        globals = initialized;
+                    } finally {
+                        exit();
+                    }
+                }
+                return globals;
+            }
         }
     }
 
@@ -209,10 +229,6 @@ public final class JsRuntime {
 
     // Install a host context property into the shared globals scope, where a binding's
     // QmlScope reaches it via the parent chain after its own lookups miss.
-    public static void putGlobal(String name, Object value) {
-        putGlobal(currentRealm(), name, value);
-    }
-
     public static void putGlobal(Realm realm, String name, Object value) {
         Scriptable g = globals(realm);
         enter(realm.safeStandardObjects);
@@ -244,20 +260,7 @@ public final class JsRuntime {
     }
 
     public static Scriptable globals(Realm realm) {
-        Scriptable g = realm.globals;
-        if (g != null) return g;
-        synchronized (realm) {
-            if (realm.globals == null) {
-                Context cx = enter(realm.safeStandardObjects);
-                try {
-                    realm.globals = QtGlobals.build(cx, realm.safeStandardObjects);
-                    if (realm.safeStandardObjects) SAFE_GLOBALS.add(realm.globals);
-                } finally {
-                    exit();
-                }
-            }
-            return realm.globals;
-        }
+        return realm.initializeGlobals();
     }
 
     private static Realm currentRealm() {

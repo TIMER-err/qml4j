@@ -5,7 +5,7 @@
     <parent>
         <groupId>io.github.timer-err</groupId>
         <artifactId>qml4j-parent</artifactId>
-        <version>0.2.32</version>
+        <version>0.2.34</version>
     </parent>
 
     <artifactId>qml4j-core</artifactId>
@@ -23,12 +23,14 @@
             <version>1.9.1</version>
         </dependency>
         <dependency>
-            <groupId>org.ow2.asm</groupId>
-            <artifactId>asm</artifactId>
+            <groupId>com.ibm.icu</groupId>
+            <artifactId>icu4j</artifactId>
+            <!-- 78+ requires Java 11; the engine's public runtime floor is Java 8. -->
+            <version>77.1</version>
         </dependency>
         <dependency>
             <groupId>org.ow2.asm</groupId>
-            <artifactId>asm-util</artifactId>
+            <artifactId>asm</artifactId>
         </dependency>
         <dependency>
             <groupId>io.github.humbleui</groupId>

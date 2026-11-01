@@ -329,10 +329,6 @@ public final class JsWrap {
     // Whether `target.name` is invokable: a QML function on a QObject, or a public
     // Java method. Used by both the JavaMember member-access path and QmlScope's
     // bare-call resolution.
-    static boolean isCallable(Object target, String name) {
-        return isCallable(target, name, null);
-    }
-
     static boolean isCallable(Object target, String name, Scriptable scope) {
         if (target == null) return false;
         if (scope != null && JsRuntime.isSafeScope(scope)) {

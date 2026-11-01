@@ -1,5 +1,7 @@
 package io.github.timer_err.qml4j.render.items.core;
 
+import io.github.timer_err.qml4j.render.text.UnicodeBreaks;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -33,7 +35,7 @@ public final class TextWrap {
         int start = 0;
         int n = text.length();
         while (start <= n) {
-            int hardBreak = text.indexOf('\n', start);
+            int hardBreak = nextHardBreak(text, start);
             int segEnd = hardBreak < 0 ? n : hardBreak;
             String seg = text.substring(start, segEnd);
             if (!wrap || maxWidth <= 0 || m.widthOf(seg) <= maxWidth) {
@@ -44,7 +46,7 @@ public final class TextWrap {
             }
             if (hardBreak < 0) break;
             start = hardBreak + 1;
-            if (start > n) break;
+            if (text.charAt(hardBreak) == '\r' && start < n && text.charAt(start) == '\n') start++;
             if (start == n) {
                 starts.add(n);
                 lines.add("");
@@ -63,66 +65,63 @@ public final class TextWrap {
     private static void wrapSegment(String seg, int origin, float maxWidth, Measure m,
                                     boolean wrapAny, boolean wordOnly, List<String> outLines,
                                     List<Integer> outStarts) {
-        int i = 0;
-        int n = seg.length();
-        while (i < n) {
-            int hi = findBreakIndex(seg, i, n, maxWidth, m, wrapAny, wordOnly);
-            if (hi == i) hi = i + 1;
-            outStarts.add(origin + i);
-            outLines.add(seg.substring(i, hi));
-            i = hi;
-        }
-        if (n == 0) {
-            outStarts.add(origin);
-            outLines.add("");
+        UnicodeBreaks.Analysis breaks = UnicodeBreaks.analyze(seg);
+        int from = 0;
+        while (from + 1 < breaks.graphemes.length) {
+            int fitted = fittingGrapheme(seg, breaks.graphemes, from, maxWidth, m);
+            int next = chooseBoundary(breaks, from, fitted, wrapAny, wordOnly);
+            outStarts.add(origin + breaks.graphemes[from]);
+            outLines.add(seg.substring(breaks.graphemes[from], breaks.graphemes[next]));
+            from = next;
         }
     }
 
-    private static int findBreakIndex(String seg, int from, int end, float maxWidth,
-                                      Measure m, boolean wrapAny, boolean wordOnly) {
-        int lo = from + 1;
-        int hi = end;
-        int best = from + 1;
-        while (lo <= hi) {
-            int mid = (lo + hi) >>> 1;
-            if (m.widthOf(seg.substring(from, mid)) <= maxWidth) {
+    private static int fittingGrapheme(String text, int[] graphemes, int from,
+                                       float maxWidth, Measure measure) {
+        int low = from + 1, high = graphemes.length - 1, best = from;
+        while (low <= high) {
+            int mid = (low + high) >>> 1;
+            if (measure.widthOf(text.substring(graphemes[from], graphemes[mid])) <= maxWidth) {
                 best = mid;
-                lo = mid + 1;
+                low = mid + 1;
             } else {
-                hi = mid - 1;
+                high = mid - 1;
             }
-        }
-        if (wrapAny || best == end) return best;
-        int ws = seg.lastIndexOf(' ', best - 1);
-        if (ws > from) return ws + 1;
-        // CJK text carries no spaces between characters, so treating "no space
-        // found" as "one giant word wider than the box" (the rule below, correct
-        // for Latin scripts) made an entire space-delimited run of Chinese/
-        // Japanese/Korean text an unsplittable unit -- it just kept extending
-        // to the NEXT space (however far away, even past the box width) instead
-        // of ever breaking between two CJK characters. Any boundary next to a
-        // CJK character is a valid break point on its own, so break right at
-        // `best` (using the full width that fits) instead of falling through.
-        if (isCjk(seg.charAt(best - 1))) return best;
-        // No word boundary fits: the first word is wider than the box. WordWrap keeps it
-        // whole on its own line (overflow); Wrap breaks it mid-word at `best`.
-        if (wordOnly) {
-            int sp = seg.indexOf(' ', best);
-            return sp < 0 ? end : sp + 1;
         }
         return best;
     }
 
-    // CJK Unified Ideographs (+ extension A), Hiragana/Katakana, Hangul syllables,
-    // and CJK/fullwidth punctuation -- scripts where each character is its own
-    // breakable unit, unlike a space-delimited Latin word.
-    private static boolean isCjk(char c) {
-        return (c >= 0x4E00 && c <= 0x9FFF)
-            || (c >= 0x3400 && c <= 0x4DBF)
-            || (c >= 0x3040 && c <= 0x30FF)
-            || (c >= 0xAC00 && c <= 0xD7A3)
-            || (c >= 0x3000 && c <= 0x303F)
-            || (c >= 0xFF00 && c <= 0xFFEF);
+    private static int chooseBoundary(UnicodeBreaks.Analysis breaks, int from, int fitted,
+                                       boolean anywhere, boolean wordOnly) {
+        if (fitted == breaks.graphemes.length - 1) return fitted;
+        if (anywhere) return Math.max(from + 1, fitted);
+        int preferred = precedingBoundary(breaks.graphemes, breaks.line, from, fitted);
+        if (preferred > from) return preferred;
+        if (wordOnly) return followingBoundary(breaks.graphemes, breaks.line, from);
+        int emergency = precedingBoundary(breaks.graphemes, breaks.emergency, from, fitted);
+        return emergency > from ? emergency
+                : followingBoundary(breaks.graphemes, breaks.emergency, from);
+    }
+
+    private static int precedingBoundary(int[] graphemes, boolean[] allowed, int from, int end) {
+        for (int i = end; i > from; i--) if (allowed[graphemes[i]]) return i;
+        return from;
+    }
+
+    private static int followingBoundary(int[] graphemes, boolean[] allowed, int from) {
+        int i = from + 1;
+        while (!allowed[graphemes[i]]) i++;
+        return i;
+    }
+
+    private static int nextHardBreak(String text, int start) {
+        for (int i = start; i < text.length(); i++) {
+            char c = text.charAt(i);
+            // UAX #14 BK, CR, LF and NL separators; CRLF is consumed as one break.
+            if (c == '\n' || c == '\r' || c == '\013' || c == '\f'
+                    || c == '\u0085' || c == '\u2028' || c == '\u2029') return i;
+        }
+        return -1;
     }
 
     public static int caretInLine(String line, float localX, Measure m) {

@@ -3,6 +3,8 @@ package io.github.timer_err.qml4j.render;
 import io.github.timer_err.qml4j.render.items.core.TextWrap;
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
+
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -96,5 +98,51 @@ class TextWrapTest {
         assertEquals("a", r.lines.get(0));
         assertEquals("", r.lines.get(1));
         assertEquals("b", r.lines.get(2));
+    }
+
+    @Test
+    void closingPunctuationMovesWithItsPrecedingText() {
+        TextWrap.Result r = TextWrap.wrap("界面文案。", "Wrap", 40, FIXED);
+        assertEquals(Arrays.asList("界面文", "案。"), r.lines);
+        assertArrayEquals(new int[]{0, 3}, r.starts);
+    }
+
+    @Test
+    void openingAndClosingBracketsStayWithTheirContents() {
+        TextWrap.Result r = TextWrap.wrap("甲（乙丙）丁", "WordWrap", 20, FIXED);
+        assertEquals(Arrays.asList("甲", "（乙", "丙）", "丁"), r.lines);
+    }
+
+    @Test
+    void longWordFallbackDoesNotStrandItsFinalPunctuation() {
+        TextWrap.Result r = TextWrap.wrap("hello.", "Wrap", 50, FIXED);
+        assertEquals(Arrays.asList("hell", "o."), r.lines);
+    }
+
+    @Test
+    void anywhereWrapStillKeepsExtendedGraphemesWhole() {
+        TextWrap.Result r = TextWrap.wrap("a\uD83D\uDC69\u200D\uD83D\uDE80\uD83C\uDDE8\uD83C\uDDF3e\u0301",
+                "WrapAnywhere", 10, FIXED);
+        assertEquals(Arrays.asList("a", "\uD83D\uDC69\u200D\uD83D\uDE80",
+                "\uD83C\uDDE8\uD83C\uDDF3", "e\u0301"), r.lines);
+        assertArrayEquals(new int[]{0, 1, 6, 10}, r.starts);
+    }
+
+    @Test
+    void hardSeparatorsPreserveEmptyLinesAndOriginalOffsets() {
+        TextWrap.Result r = TextWrap.wrap("a\r\nb\u0085\u2028c\u2029", "NoWrap", 10, FIXED);
+        assertEquals(Arrays.asList("a", "b", "", "c", ""), r.lines);
+        assertArrayEquals(new int[]{0, 3, 5, 6, 8}, r.starts);
+    }
+
+    @Test
+    void smallestIndivisiblePunctuationUnitCanOverflowANarrowBox() {
+        assertEquals(Arrays.asList("好。"), TextWrap.wrap("好。", "Wrap", 10, FIXED).lines);
+    }
+
+    @Test
+    void emergencyWrappingHonorsNonBreakingGlue() {
+        TextWrap.Result r = TextWrap.wrap("a\u00A0b c", "Wrap", 10, FIXED);
+        assertEquals(Arrays.asList("a\u00A0b ", "c"), r.lines);
     }
 }

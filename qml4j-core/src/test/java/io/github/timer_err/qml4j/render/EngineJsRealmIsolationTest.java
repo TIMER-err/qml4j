@@ -3,12 +3,26 @@ package io.github.timer_err.qml4j.render;
 import io.github.timer_err.qml4j.engine.QmlEngine;
 import io.github.timer_err.qml4j.engine.QmlSafeBridge;
 import io.github.timer_err.qml4j.engine.binding.DirtyQueue;
+import io.github.timer_err.qml4j.engine.js.JsRuntime;
 import io.github.timer_err.qml4j.render.items.core.Item;
 import io.github.timer_err.qml4j.render.items.view.Loader;
 import org.junit.jupiter.api.Test;
+import org.mozilla.javascript.Scriptable;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class EngineJsRealmIsolationTest {
 
@@ -78,6 +92,64 @@ class EngineJsRealmIsolationTest {
                 StockTypes.safeRegistry());
         assertThrows(RuntimeException.class, () -> view.load(
                 "Item { width: (function() { while (true) {} })() }"));
+    }
+
+    @Test
+    void concurrentCallersPublishOneFullyRegisteredSafeGlobalScope() throws Exception {
+        JsRuntime.Realm realm = JsRuntime.newRealm(true);
+        int callers = 8;
+        ExecutorService executor = Executors.newFixedThreadPool(callers);
+        CountDownLatch ready = new CountDownLatch(callers);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<Scriptable>> scopes = new ArrayList<>();
+        try {
+            for (int i = 0; i < callers; i++) {
+                scopes.add(executor.submit(() -> {
+                    ready.countDown();
+                    assertTrue(start.await(5, TimeUnit.SECONDS));
+                    Scriptable scope = JsRuntime.globals(realm);
+                    assertTrue(JsRuntime.isSafeScope(scope),
+                            "the scope must be registered before other threads can observe it");
+                    return scope;
+                }));
+            }
+            assertTrue(ready.await(5, TimeUnit.SECONDS));
+            start.countDown();
+            Scriptable initialized = scopes.get(0).get(5, TimeUnit.SECONDS);
+            for (Future<Scriptable> scope : scopes) {
+                assertSame(initialized, scope.get(5, TimeUnit.SECONDS));
+            }
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void concurrentRealmsKeepDistinctGlobalScopes() throws Exception {
+        JsRuntime.Realm first = JsRuntime.newRealm(true);
+        JsRuntime.Realm second = JsRuntime.newRealm(false);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            Future<Scriptable> firstScope = executor.submit(() -> {
+                assertTrue(start.await(5, TimeUnit.SECONDS));
+                return JsRuntime.globals(first);
+            });
+            Future<Scriptable> secondScope = executor.submit(() -> {
+                assertTrue(start.await(5, TimeUnit.SECONDS));
+                return JsRuntime.globals(second);
+            });
+            start.countDown();
+            Scriptable safeScope = firstScope.get(5, TimeUnit.SECONDS);
+            Scriptable normalScope = secondScope.get(5, TimeUnit.SECONDS);
+            assertNotSame(safeScope, normalScope);
+            assertTrue(JsRuntime.isSafeScope(safeScope));
+            assertFalse(JsRuntime.isSafeScope(normalScope));
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+        }
     }
 
     private static String dynamicComponentSource(String heightExpression) {
