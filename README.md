@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://jitpack.io/#TIMER-err/qml4j/0.2.36"><img src="https://jitpack.io/v/TIMER-err/qml4j.svg" alt="JitPack"></a>
+  <a href="https://jitpack.io/#TIMER-err/qml4j/0.2.37"><img src="https://jitpack.io/v/TIMER-err/qml4j.svg" alt="JitPack"></a>
   <img src="https://img.shields.io/badge/Java-8%2B-7C6CF0" alt="Java 8+">
   <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
 </p>
@@ -65,7 +65,7 @@ Or run a whole QML project from disk, quickshell-style — point the desktop hos
 
 ## Install
 
-`qml4j-core` is distributed through JitPack as `com.github.TIMER-err.qml4j:qml4j-core:0.2.36` (Git tag `v0.2.36`). Other dependencies, including Skija, remain on Maven Central.
+`qml4j-core` is distributed through JitPack as `com.github.TIMER-err.qml4j:qml4j-core:0.2.37` (Git tag `v0.2.37`). Other dependencies, including Skija, remain on Maven Central.
 
 Maven:
 
@@ -81,7 +81,7 @@ Maven:
 <dependency>
     <groupId>com.github.TIMER-err.qml4j</groupId>
     <artifactId>qml4j-core</artifactId>
-    <version>0.2.36</version>
+    <version>0.2.37</version>
 </dependency>
 <!-- Skija is a `provided` dependency of the engine; add the native bundle for your platform. -->
 <dependency>
@@ -114,7 +114,7 @@ Module dependencies (`build.gradle.kts`):
 
 ```kotlin
 dependencies {
-    implementation("com.github.TIMER-err.qml4j:qml4j-core:0.2.36")
+    implementation("com.github.TIMER-err.qml4j:qml4j-core:0.2.37")
     // pick your platform: skija-linux-x64 / skija-windows-x64 / skija-macos-x64 / skija-macos-arm64
     runtimeOnly("io.github.humbleui:skija-linux-x64:0.143.17")
 }
@@ -122,7 +122,7 @@ dependencies {
 
 The engine keeps Skija `provided` so you choose the platform-native artifact yourself; it transitively pulls in the ANTLR runtime, Rhino, ASM and ICU4J. Java 8+.
 
-Source builds with `mvn install` still use `io.github.timer-err:qml4j-core:0.2.36`. These local artifacts do not replace the JitPack coordinates above.
+Source builds with `mvn install` still use `io.github.timer-err:qml4j-core:0.2.37`. These local artifacts do not replace the JitPack coordinates above.
 
 ## Text wrapping
 
@@ -184,7 +184,7 @@ qml4j aims to be a fully native-Java path from QML source to pixels — a drop-i
 </p>
 
 <p align="center">
-  <a href="https://jitpack.io/#TIMER-err/qml4j/0.2.36"><img src="https://jitpack.io/v/TIMER-err/qml4j.svg" alt="JitPack"></a>
+  <a href="https://jitpack.io/#TIMER-err/qml4j/0.2.37"><img src="https://jitpack.io/v/TIMER-err/qml4j.svg" alt="JitPack"></a>
   <img src="https://img.shields.io/badge/desktop-Linux%20%E2%80%A2%20Windows-2BD46E" alt="Desktop">
   <img src="https://img.shields.io/badge/Android-D8%20%E2%86%92%20DEX-A4C639" alt="Android">
 </p>

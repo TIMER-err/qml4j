@@ -75,7 +75,7 @@ android {
 dependencies {
     skijaNative("io.github.humbleui:skija-android-arm64:0.143.17")
 
-    implementation("com.github.TIMER-err.qml4j:qml4j-core:0.2.36")
+    implementation("com.github.TIMER-err.qml4j:qml4j-core:0.2.37")
 
     implementation("io.github.humbleui:skija-shared:0.143.17")
     implementation("io.github.humbleui:skija-android-arm64:0.143.17")

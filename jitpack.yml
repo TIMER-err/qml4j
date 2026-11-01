@@ -1,4 +1,6 @@
 jdk:
   - openjdk17
 install:
-  - mvn -B --no-transfer-progress -Pjitpack -pl qml4j-core -am clean install -DskipTests
+  # The legacy image's Maven cannot run our compiler plugin. Bootstrap a pinned wrapper.
+  - mvn -B org.apache.maven.plugins:maven-wrapper-plugin:3.1.1:wrapper -Dmaven=3.9.11
+  - ./mvnw -B --no-transfer-progress -Pjitpack -pl qml4j-core -am clean install -DskipTests
