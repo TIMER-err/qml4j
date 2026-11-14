@@ -737,40 +737,19 @@ public final class Painter {
     }
 
 
-    // decodeGen is incremented only on the render thread (here and Image.releaseResources);
-    // it is volatile for visibility to the decode worker (which only reads it), so the
-    // non-atomic ++ is a safe single-writer increment.
-    @SuppressWarnings("NonAtomicOperationOnVolatileField")
     public void drawImage(Image node, float w, float h, float alpha) {
         String src = node.source.peek();
         if (src == null || src.isEmpty()) {
-            if (node.skiaImage != null) { node.skiaImage.close(); node.skiaImage = null; }
-            node.loadedSource = null;
-            node.status.set(0);
+            node.clearSource();
             return;
         }
         if (!src.equals(node.loadedSource)) {
             // New source: keep showing the old image (no blank flash) and decode the new
             // one off the render thread; adopt it below once ready.
-            node.loadedSource = src;
-            long gen = ++node.decodeGen;
-            node.status.set(2); // Loading
+            long gen = node.startDecode(src);
             ImageLoader.decode(node, src, gen, renderer.resources(), renderer.networkResourcePolicy());
         }
-        if (node.decodeReadyGen == node.decodeGen && node.adoptedGen != node.decodeGen) {
-            node.adoptedGen = node.decodeGen;
-            if (node.skiaImage != null) { node.skiaImage.close(); node.skiaImage = null; }
-            io.github.humbleui.skija.Image pend = node.pendingImage;
-            node.pendingImage = null;
-            if (pend != null) {
-                node.skiaImage = pend;
-                node.intrinsicWidth = node.pendW;
-                node.intrinsicHeight = node.pendH;
-                node.status.set(1); // Ready
-            } else {
-                node.status.set(3); // Error
-            }
-        }
+        node.adoptDecode();
         if (node.skiaImage == null) return;
         int iw = node.intrinsicWidth;
         int ih = node.intrinsicHeight;

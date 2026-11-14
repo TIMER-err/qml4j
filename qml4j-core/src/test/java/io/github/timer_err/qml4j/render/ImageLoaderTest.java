@@ -14,10 +14,13 @@ import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ImageLoaderTest {
@@ -98,6 +101,101 @@ class ImageLoaderTest {
                     base + "/denied", base + "/allowed"), checkedUrls);
         } finally {
             server.stop(0);
+        }
+    }
+
+    @Test
+    void recyclingQueuedImagesLoadsOnlyTheLatestCoverAndSkipsDiscardedRows() throws Exception {
+        byte[] png = solidImage(0xFF00CC66);
+        CountDownLatch started = new CountDownLatch(ImageLoader.WORKER_COUNT);
+        CountDownLatch release = new CountDownLatch(1);
+        List<String> requested = Collections.synchronizedList(new ArrayList<>());
+        ResourceLoader resources = source -> {
+            if (source.startsWith("hold/")) {
+                started.countDown();
+                try {
+                    if (!release.await(30, TimeUnit.SECONDS)) return null;
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return null;
+                }
+            } else {
+                requested.add(source);
+            }
+            return png;
+        };
+        StringBuilder qml = new StringBuilder("Item { width: 32; height: 8;");
+        for (int i = 0; i < ImageLoader.WORKER_COUNT; i++) {
+            qml.append("Image { x: 16; width: 16; height: 8; source: \"hold/")
+                    .append(i).append("\" }");
+        }
+        qml.append("Image { objectName: \"recycled\"; width: 16; height: 8; source: \"old\" }")
+                .append("Image { objectName: \"discarded\"; x: 16; width: 16; height: 8; source: \"discarded\" }}");
+        QmlView view = QmlView.withStockTypes(new QmlEngine()).resources(resources);
+        var root = view.load(qml.toString());
+        var recycled = (io.github.timer_err.qml4j.render.items.core.Image)
+                view.findByObjectName("recycled");
+        var discarded = view.findByObjectName("discarded");
+        try (Surface surface = Surface.makeRasterN32Premul(32, 8);
+             Bitmap pixels = new Bitmap()) {
+            view.renderer().render(surface.getCanvas(), root);
+            assertTrue(started.await(5, TimeUnit.SECONDS), "hold active downloads while recycling rows");
+            for (int i = 0; i < 400; i++) {
+                recycled.source.set("obsolete/" + i);
+                view.renderer().render(surface.getCanvas(), root);
+            }
+            root.children.remove(discarded);
+            discarded.dispose();
+            recycled.source.set("latest");
+            view.renderer().render(surface.getCanvas(), root);
+            release.countDown();
+
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            do {
+                view.renderer().render(surface.getCanvas(), root);
+                if (recycled.status.peek().intValue() == 1) break;
+                Thread.sleep(5);
+            } while (System.nanoTime() < deadline);
+            assertEquals(1, recycled.status.peek().intValue(), "the current cover must finish loading");
+            assertEquals(List.of("latest"), requested, "obsolete and disposed rows must not perform I/O");
+            pixels.allocN32Pixels(32, 8);
+            assertTrue(surface.readPixels(pixels, 0, 0));
+            assertEquals(0xFF00CC66, pixels.getColor(4, 4));
+        } finally {
+            release.countDown();
+            view.dispose();
+        }
+    }
+
+    @Test
+    void clearingOrDisposingAnImageClosesPendingAndLateNativeResults() {
+        byte[] png = solidImage(0xFF00CC66);
+        for (boolean dispose : new boolean[] {false, true}) {
+            var node = new io.github.timer_err.qml4j.render.items.core.Image();
+            long gen = node.startDecode("cover");
+            try (Image pending = Image.makeFromEncoded(png);
+                 Image late = Image.makeFromEncoded(png)) {
+                node.publishDecode(gen, pending, 1, 1);
+                if (dispose) node.dispose();
+                else node.clearSource();
+                assertTrue(pending.isClosed(), "unadopted native images must be released");
+                node.publishDecode(gen, late, 1, 1);
+                node.adoptDecode();
+                assertTrue(late.isClosed(), "completion must not revive a cleared or disposed image");
+                assertNull(node.skiaImage);
+                assertFalse(node.hasPendingDecode());
+            } finally {
+                node.dispose();
+            }
+        }
+    }
+
+    private static byte[] solidImage(int color) {
+        try (Surface surface = Surface.makeRasterN32Premul(1, 1)) {
+            surface.getCanvas().clear(color);
+            try (Image image = surface.makeImageSnapshot(); Data data = image.encodeToData()) {
+                return data.getBytes();
+            }
         }
     }
 

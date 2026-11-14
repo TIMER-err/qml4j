@@ -3,6 +3,8 @@ package io.github.timer_err.qml4j.render.items.core;
 import io.github.timer_err.qml4j.engine.binding.Property;
 import io.github.timer_err.qml4j.render.Painter;
 
+import java.util.concurrent.Future;
+
 public class Image extends Item {
     public final Property<String> source = new Property<>(null);
     // String ("Stretch"/"PreserveAspectCrop"/...) or the Image.* fillMode enum (a Long);
@@ -31,17 +33,14 @@ public class Image extends Item {
     public String loadedSource;
     public int intrinsicWidth;
     public int intrinsicHeight;
-    // Async decode: a background thread loads + decodes the source (local or remote) into
-    // a raster image so the render thread never blocks on makeFromEncoded/downscale (a
-    // song-switch cover or a scrolling list of thumbnails would otherwise stall a frame).
-    // The render thread bumps decodeGen on a source change; the worker publishes the
-    // decoded image + decodeReadyGen for that gen; the render thread adopts it (and is the
-    // only one to set the status Property / touch skiaImage).
-    public volatile long decodeGen;
-    public volatile long decodeReadyGen = -1;
-    public volatile io.github.humbleui.skija.Image pendingImage;
-    public volatile int pendW, pendH;
-    public long adoptedGen = -1;   // render-thread only
+    // Workers only publish raster images. Native-image adoption and status changes stay
+    // on the render thread; the monitor protects publication against source changes/disposal.
+    private volatile long decodeGen;
+    private volatile long decodeReadyGen = -1;
+    private io.github.humbleui.skija.Image pendingImage;
+    private int pendW, pendH;
+    private long adoptedGen = -1;
+    private Future<?> decodeTask;
 
     public Image() {
         wireContentInvalidation(source, fillMode, radius, horizontalAlignment, verticalAlignment,
@@ -53,25 +52,95 @@ public class Image extends Item {
         p.drawImage(this, w, h, alpha);
     }
 
-    // Close the decoded native image when this item is discarded (e.g. a list
-    // delegate scrolled out of a model swap) — it isn't GC-managed, so a row's
-    // cover would otherwise leak its native memory.
-    // decodeGen is bumped only on the render thread (here and in Painter.drawImage); it is
-    // volatile purely for visibility to the decode worker, which only READS it -- so the
-    // non-atomic ++ is a single-writer increment with no lost-update risk.
-    @SuppressWarnings("NonAtomicOperationOnVolatileField")
-    @Override
-    protected void releaseResources() {
+    public boolean isDecodeCurrent(long gen) {
+        return decodeGen == gen;
+    }
+
+    public boolean hasPendingDecode() {
+        return loadedSource != null && !loadedSource.isEmpty() && decodeGen != adoptedGen;
+    }
+
+    public synchronized long startDecode(String src) {
+        cancelDecode();
+        long gen = decodeGen;
+        loadedSource = src;
+        status.set(2); // Loading; retain the previously adopted image until ready.
+        return gen;
+    }
+
+    public synchronized boolean attachDecodeTask(long gen, Future<?> task) {
+        if (decodeGen != gen) {
+            task.cancel(false);
+            return false;
+        }
+        decodeTask = task;
+        return true;
+    }
+
+    public synchronized void publishDecode(long gen, io.github.humbleui.skija.Image image,
+                                           int width, int height) {
+        if (decodeGen != gen) {
+            if (image != null) image.close();
+            return;
+        }
+        pendingImage = image;
+        pendW = width;
+        pendH = height;
+        decodeTask = null;
+        decodeReadyGen = gen;
+        // Invalidate cached pictures even when no input or animation dirties the scene.
+        markContentDirtyAsync();
+    }
+
+    public void adoptDecode() {
+        if (decodeReadyGen != decodeGen || adoptedGen == decodeGen) return;
+        synchronized (this) {
+            if (decodeReadyGen != decodeGen || adoptedGen == decodeGen) return;
+            adoptedGen = decodeGen;
+            if (skiaImage != null) skiaImage.close();
+            skiaImage = pendingImage;
+            pendingImage = null;
+            if (skiaImage != null) {
+                intrinsicWidth = pendW;
+                intrinsicHeight = pendH;
+                status.set(1); // Ready
+            } else {
+                status.set(3); // Error
+            }
+        }
+    }
+
+    public synchronized void clearSource() {
+        if (loadedSource == null && skiaImage == null && decodeTask == null) return;
+        releaseImages();
+        status.set(0); // Null
+    }
+
+    // All callers hold the monitor. Invalidate before cancelling: completion can race
+    // cancellation, and a running URL connection need not respond to interruption.
+    private void cancelDecode() {
+        decodeGen++;
+        if (decodeTask != null) {
+            decodeTask.cancel(true);
+            decodeTask = null;
+        }
+        if (pendingImage != null) {
+            pendingImage.close();
+            pendingImage = null;
+        }
+    }
+
+    private void releaseImages() {
+        cancelDecode();
         if (skiaImage != null) {
             skiaImage.close();
             skiaImage = null;
         }
-        io.github.humbleui.skija.Image pend = pendingImage;
-        if (pend != null) {
-            pend.close();
-            pendingImage = null;
-        }
-        decodeGen++;   // invalidate any in-flight decode so it discards its result
         loadedSource = null;
+    }
+
+    @Override
+    protected synchronized void releaseResources() {
+        releaseImages();
     }
 }

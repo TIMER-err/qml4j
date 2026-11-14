@@ -15,8 +15,10 @@ import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
 import java.net.URL;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 // Background load + decode of an Image source (local or remote). A daemon thread loads
 // the bytes and rasterizes them, so Skija's makeFromEncoded/downscale never runs on the
@@ -30,18 +32,27 @@ final class ImageLoader {
         return src.startsWith("http://") || src.startsWith("https://");
     }
 
-    private static final ExecutorService POOL = Executors.newCachedThreadPool(r -> {
+    static final int WORKER_COUNT = 4;
+    private static final ThreadPoolExecutor POOL = new ThreadPoolExecutor(
+            WORKER_COUNT, WORKER_COUNT, 30, TimeUnit.SECONDS, new LinkedBlockingQueue<>(), r -> {
         Thread t = new Thread(r, "qml4j-image-fetch");
         t.setDaemon(true);
         return t;
     });
+
+    static {
+        POOL.allowCoreThreadTimeOut(true);
+    }
 
     // Load (local or remote) AND decode the source off the render thread into a raster
     // image the render thread just adopts. `gen` guards a superseded source: if the node's
     // decodeGen moved on (a newer source, or the item was released) the result is dropped.
     static void decode(Image node, String src, long gen, ResourceLoader resources,
                        NetworkResourcePolicy networkPolicy) {
-        POOL.submit(() -> {
+        int sourceWidth = node.sourceSize.width.peek().intValue();
+        int sourceHeight = node.sourceSize.height.peek().intValue();
+        FutureTask<Void> task = new FutureTask<Void>(() -> {
+            if (!node.isDecodeCurrent(gen)) return null;
             byte[] bytes = null;
             try {
                 if (isRemote(src)) bytes = get(src, 5, networkPolicy);
@@ -49,32 +60,28 @@ final class ImageLoader {
             } catch (Throwable ignore) {
                 // bytes stays null -> treated as a failed load below
             }
+            if (!node.isDecodeCurrent(gen)) return null;
             io.github.humbleui.skija.Image img = null;
             int w = 0, h = 0;
             if (bytes != null) {
                 try {
-                    img = decodeRaster(bytes,
-                            node.sourceSize.width.peek().intValue(),
-                            node.sourceSize.height.peek().intValue());
+                    img = decodeRaster(bytes, sourceWidth, sourceHeight);
                     w = img.getWidth();
                     h = img.getHeight();
                 } catch (Throwable t) {
                     img = null;
                 }
             }
-            if (node.decodeGen != gen) {   // superseded -> drop
-                if (img != null) img.close();
-                return;
+            node.publishDecode(gen, img, w, h);
+            return null;
+        }) {
+            @Override
+            protected void done() {
+                // Recycled delegates must not leave obsolete requests in the queue.
+                if (isCancelled()) POOL.remove(this);
             }
-            node.pendW = w;
-            node.pendH = h;
-            node.pendingImage = img;
-            node.decodeReadyGen = gen;
-            // A cache boundary may be replaying a picture recorded while this image was still
-            // loading. Completion itself must invalidate it; otherwise adoption waits for an
-            // unrelated event (typically a list scroll) to dirty the scene.
-            node.markContentDirtyAsync();
-        });
+        };
+        if (node.attachDecodeTask(gen, task)) POOL.execute(task);
     }
 
     // Decode encoded bytes into a RASTER image, forcing the real decode here (off the
