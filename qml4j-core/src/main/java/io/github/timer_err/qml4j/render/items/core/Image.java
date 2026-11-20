@@ -4,6 +4,7 @@ import io.github.timer_err.qml4j.engine.binding.Property;
 import io.github.timer_err.qml4j.render.Painter;
 
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class Image extends Item {
     public final Property<String> source = new Property<>(null);
@@ -35,7 +36,8 @@ public class Image extends Item {
     public int intrinsicHeight;
     // Workers only publish raster images. Native-image adoption and status changes stay
     // on the render thread; the monitor protects publication against source changes/disposal.
-    private volatile long decodeGen;
+    // Bumped under the monitor, read lock-free by decode workers and the render thread.
+    private final AtomicLong decodeGen = new AtomicLong();
     private volatile long decodeReadyGen = -1;
     private io.github.humbleui.skija.Image pendingImage;
     private int pendW, pendH;
@@ -53,23 +55,23 @@ public class Image extends Item {
     }
 
     public boolean isDecodeCurrent(long gen) {
-        return decodeGen == gen;
+        return decodeGen.get() == gen;
     }
 
     public boolean hasPendingDecode() {
-        return loadedSource != null && !loadedSource.isEmpty() && decodeGen != adoptedGen;
+        return loadedSource != null && !loadedSource.isEmpty() && decodeGen.get() != adoptedGen;
     }
 
     public synchronized long startDecode(String src) {
         cancelDecode();
-        long gen = decodeGen;
+        long gen = decodeGen.get();
         loadedSource = src;
         status.set(2); // Loading; retain the previously adopted image until ready.
         return gen;
     }
 
     public synchronized boolean attachDecodeTask(long gen, Future<?> task) {
-        if (decodeGen != gen) {
+        if (decodeGen.get() != gen) {
             task.cancel(false);
             return false;
         }
@@ -79,7 +81,7 @@ public class Image extends Item {
 
     public synchronized void publishDecode(long gen, io.github.humbleui.skija.Image image,
                                            int width, int height) {
-        if (decodeGen != gen) {
+        if (decodeGen.get() != gen) {
             if (image != null) image.close();
             return;
         }
@@ -93,10 +95,12 @@ public class Image extends Item {
     }
 
     public void adoptDecode() {
-        if (decodeReadyGen != decodeGen || adoptedGen == decodeGen) return;
+        long gen = decodeGen.get();
+        if (decodeReadyGen != gen || adoptedGen == gen) return;
         synchronized (this) {
-            if (decodeReadyGen != decodeGen || adoptedGen == decodeGen) return;
-            adoptedGen = decodeGen;
+            gen = decodeGen.get();
+            if (decodeReadyGen != gen || adoptedGen == gen) return;
+            adoptedGen = gen;
             if (skiaImage != null) skiaImage.close();
             skiaImage = pendingImage;
             pendingImage = null;
@@ -119,7 +123,7 @@ public class Image extends Item {
     // All callers hold the monitor. Invalidate before cancelling: completion can race
     // cancellation, and a running URL connection need not respond to interruption.
     private void cancelDecode() {
-        decodeGen++;
+        decodeGen.incrementAndGet();
         if (decodeTask != null) {
             decodeTask.cancel(true);
             decodeTask = null;
