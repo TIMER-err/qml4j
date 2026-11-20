@@ -10,8 +10,11 @@ public class Behavior extends Item implements Animatable, Property.WriteIntercep
 
     private Property<Object> bound;
     private PropertyAnimation template;
-    private long durationMs = 250L;
-    private int easingType = 0;
+    // Snapshotted from the template each time an animation starts (Qt semantics), not at
+    // attach: a non-literal `duration`/`easing.type` (Easing.OutCubic, a token binding) is
+    // a deferred binding that has not evaluated yet when attach runs during construction.
+    private long durationMs;
+    private int easingType;
 
     private boolean running;
     private long startNanos = -1L;
@@ -47,7 +50,7 @@ public class Behavior extends Item implements Animatable, Property.WriteIntercep
         lastDisplayed = raw.peek();
         suppressStartup = "implicitWidth".equals(propName) || "implicitHeight".equals(propName)
             || propName.endsWith("preferredWidth") || propName.endsWith("preferredHeight");
-        readTemplate();
+        findTemplate();
         raw.setInterceptor(this);
     }
 
@@ -59,14 +62,10 @@ public class Behavior extends Item implements Animatable, Property.WriteIntercep
         enabled = true;
     }
 
-    private void readTemplate() {
+    private void findTemplate() {
         for (Item c : children) {
             if (!(c instanceof PropertyAnimation)) continue;
             template = (PropertyAnimation) c;
-            Number d = template.duration.peek();
-            if (d != null) durationMs = d.longValue();
-            Number e = template.easing.type.peek();
-            if (e != null) easingType = e.intValue();
             return;
         }
     }
@@ -110,6 +109,9 @@ public class Behavior extends Item implements Animatable, Property.WriteIntercep
         preparedFrom = pFrom;
         preparedTo = pTo;
         running = true;
+        Number d = template.duration.peek();
+        durationMs = d != null ? d.longValue() : 250L;
+        easingType = template.easing.type.peekInt();
         startNanos = -1L;
         writeBack(template.interpolate(pFrom, pTo, 0.0));
     }
