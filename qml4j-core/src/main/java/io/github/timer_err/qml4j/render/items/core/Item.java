@@ -517,9 +517,32 @@ public class Item extends QObject {
             }
             if (v instanceof Property) {
                 ((Property<?>) v).unbind();
+                unbindDeclaredValue(obj, ((Property<?>) v).peek());
             } else if (descendHolders && isEngineHolder(v)) {
                 unbindFields(v, false);
             }
+            unbindDeclaredValue(obj, v);
+        }
+    }
+
+    // ShapePath/GradientStop are not visual children. Their bindings still retain the
+    // declaring component through QmlScope. Follow only compiler-stamped ownership:
+    // a referenced theme gradient/model must keep its own bindings when this item dies.
+    private static void unbindDeclaredValue(Object owner, Object value) {
+        if (value instanceof List) {
+            List<?> values = (List<?>) value;
+            for (int i = 0, size = values.size(); i < size; i++) {
+                unbindDeclaredObject(owner, values.get(i));
+            }
+        } else {
+            unbindDeclaredObject(owner, value);
+        }
+    }
+
+    private static void unbindDeclaredObject(Object owner, Object value) {
+        if (value instanceof QObject && !(value instanceof Item)
+                && ((QObject) value).__getQmlParent() == owner) {
+            unbindFields(value, true);
         }
     }
 

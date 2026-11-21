@@ -380,6 +380,10 @@ public final class Painter {
         lineBlobs.clear();
         elideCache.clear();
         wrapCache.clear();
+        if (imageAlphaPaintField != null) {
+            imageAlphaPaintField.close();
+            imageAlphaPaintField = null;
+        }
     }
 
     private String[] wrapLines(Font font, String s, String mode, float boxW) {
@@ -966,12 +970,13 @@ public final class Painter {
         float dy = me.shadowVerticalOffset.peekFloat();
         float dx = me.shadowHorizontalOffset.peekFloat();
         float sg = Renderer.sigma(me.shadowBlur.peekFloat() * 32f); // Qt blur is 0..1
-        Paint sp = new Paint();
-        sp.setImageFilter(ImageFilter.makeDropShadow(dx, dy, sg, sg, sc));
-        float mg = sg * 3f + Math.abs(dx) + Math.abs(dy) + 8f;
-        int save = canvas.saveLayer(Rect.makeXYWH(-mg, -mg, w + 2 * mg, h + 2 * mg), sp);
-        try { drawGraded(me, source, w, h, alpha); }
-        finally { canvas.restoreToCount(save); sp.close(); }
+        try (ImageFilter shadow = ImageFilter.makeDropShadow(dx, dy, sg, sg, sc);
+             Paint sp = new Paint().setImageFilter(shadow)) {
+            float mg = sg * 3f + Math.abs(dx) + Math.abs(dy) + 8f;
+            int save = canvas.saveLayer(Rect.makeXYWH(-mg, -mg, w + 2 * mg, h + 2 * mg), sp);
+            try { drawGraded(me, source, w, h, alpha); }
+            finally { canvas.restoreToCount(save); }
+        }
     }
 
     // Colour grading (contrast/brightness/colorize/saturation) wraps the blurred
@@ -983,7 +988,8 @@ public final class Painter {
             drawBlurred(me, source, w, h, alpha);
             return;
         }
-        try (Paint gp = new Paint().setColorFilter(ColorFilter.makeMatrix(new ColorMatrix(matrix)))) {
+        try (ColorFilter grade = ColorFilter.makeMatrix(new ColorMatrix(matrix));
+             Paint gp = new Paint().setColorFilter(grade)) {
             int save = canvas.saveLayer(Rect.makeXYWH(0, 0, Math.max(0f, w), Math.max(0f, h)), gp);
             try { drawBlurred(me, source, w, h, alpha); }
             finally { canvas.restoreToCount(save); }
@@ -1001,7 +1007,8 @@ public final class Painter {
             finally { canvas.restoreToCount(save); }
             return;
         }
-        try (Paint bp = new Paint().setImageFilter(ImageFilter.makeBlur(sigma, sigma, FilterTileMode.DECAL))) {
+        try (ImageFilter blur = ImageFilter.makeBlur(sigma, sigma, FilterTileMode.DECAL);
+             Paint bp = new Paint().setImageFilter(blur)) {
             float mg = sigma * 3f + 4f;
             int save = canvas.saveLayer(Rect.makeXYWH(-mg, -mg, w + 2 * mg, h + 2 * mg), bp);
             try { drawSourceAtEffectOrigin(source, alpha); }
@@ -1102,7 +1109,9 @@ public final class Painter {
         byte[] alphaTable = maskAlphaTable(
             me.maskThresholdMin.peekFloat(), me.maskThresholdMax.peekFloat(),
             me.maskSpreadAtMin.peekFloat(), me.maskSpreadAtMax.peekFloat(), inverted);
-        paint.setColorFilter(ColorFilter.makeTableARGB(alphaTable, null, null, null));
+        try (ColorFilter mask = ColorFilter.makeTableARGB(alphaTable, null, null, null)) {
+            paint.setColorFilter(mask);
+        }
         return paint;
     }
 

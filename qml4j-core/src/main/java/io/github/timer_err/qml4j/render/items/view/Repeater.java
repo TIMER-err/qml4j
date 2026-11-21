@@ -45,6 +45,7 @@ public class Repeater extends Item implements DelegateHost {
     private Object lastModel;
     private ListModel boundModel;
     private SignalHandler modelListener;
+    private boolean disposed;
     // A stable task instance so repeated enqueues within one DirtyQueue flush
     // collapse to a single rebuild (the queue is a LinkedHashSet keyed on identity).
     // A window slide bumps windowStart, and opening a page bumps model + windowCount
@@ -106,13 +107,14 @@ public class Repeater extends Item implements DelegateHost {
     }
 
     private void scheduleRebuild() {
+        if (disposed) return;
         DirtyQueue dq = DirtyQueue.current();
         if (dq != null) dq.enqueue(rebuildTask);
         else rebuild();
     }
 
     private void rebuild() {
-        if (factory == null) return;
+        if (disposed || factory == null) return;
         Item visualParent = parent.peek();
         if (visualParent == null) return;
         Object m = model.peek();
@@ -214,6 +216,17 @@ public class Repeater extends Item implements DelegateHost {
             MemberAccess.writeMember(d, "modelData", dataAt(m, global));
             assigned.set(i, global);
         }
+    }
+
+    @Override
+    protected void releaseResources() {
+        disposed = true;
+        attachModelSignals(null);
+        for (Item item : instances) item.dispose();
+        instances.clear();
+        assigned.clear();
+        lastModel = null;
+        factory = null;
     }
 
     private static int sizeOf(Object m) {

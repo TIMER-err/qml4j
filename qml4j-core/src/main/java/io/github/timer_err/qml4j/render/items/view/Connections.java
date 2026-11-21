@@ -37,18 +37,28 @@ public class Connections extends Item implements SignalRelay {
 
     private void rebind() {
         QObject next = target.peek();
-        if (boundTarget != null) {
-            for (Map.Entry<String, SignalHandler> e : handlers.entrySet()) {
-                Signal s = findSignal(boundTarget, e.getKey());
-                if (s != null) s.disconnect(e.getValue());
-            }
-        }
+        disconnectTarget();
         boundTarget = next;
         if (next == null) return;
         for (Map.Entry<String, SignalHandler> e : handlers.entrySet()) {
             Signal s = findSignal(next, e.getKey());
             if (s != null) s.connect(e.getValue());
         }
+    }
+
+    @Override
+    protected void releaseResources() {
+        disconnectTarget();
+        handlers.clear();
+    }
+
+    private void disconnectTarget() {
+        if (boundTarget == null) return;
+        for (Map.Entry<String, SignalHandler> entry : handlers.entrySet()) {
+            Signal signal = findSignal(boundTarget, entry.getKey());
+            if (signal != null) signal.disconnect(entry.getValue());
+        }
+        boundTarget = null;
     }
 
     private static Signal findSignal(QObject obj, String name) {

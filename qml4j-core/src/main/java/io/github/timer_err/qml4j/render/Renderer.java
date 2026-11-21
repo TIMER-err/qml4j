@@ -1125,7 +1125,7 @@ public final class Renderer {
 
     private void attachLoadedItem(Loader node, Item child) {
         if (node.loadedItem != null) {
-            node.children.remove(node.loadedItem);
+            node.loadedItem.dispose();
         }
         node.loadedItem = child;
         child.parent.set(node);
@@ -1140,7 +1140,7 @@ public final class Renderer {
 
     private void clearLoadedItem(Loader node) {
         if (node.loadedItem != null) {
-            node.children.remove(node.loadedItem);
+            node.loadedItem.dispose();
             node.loadedItem = null;
         }
         node.item.set(null);
@@ -1253,26 +1253,34 @@ public final class Renderer {
         Paint p = new Paint();
         if (effect instanceof DropShadow) {
             DropShadow d = (DropShadow) effect;
-            p.setImageFilter(ImageFilter.makeDropShadow(
-                d.offsetX.peekFloat(), d.offsetY.peekFloat(),
-                sigma(d.radius.peekFloat()), sigma(d.radius.peekFloat()),
-                parseColor(d.color.peek())));
+            try (ImageFilter shadow = ImageFilter.makeDropShadow(
+                    d.offsetX.peekFloat(), d.offsetY.peekFloat(),
+                    sigma(d.radius.peekFloat()), sigma(d.radius.peekFloat()),
+                    parseColor(d.color.peek()))) {
+                p.setImageFilter(shadow);
+            }
         } else if (effect instanceof Glow) {
             Glow g = (Glow) effect;
-            p.setImageFilter(ImageFilter.makeDropShadow(
-                0f, 0f, sigma(g.radius.peekFloat()), sigma(g.radius.peekFloat()),
-                parseColor(g.color.peek())));
+            try (ImageFilter glow = ImageFilter.makeDropShadow(
+                    0f, 0f, sigma(g.radius.peekFloat()), sigma(g.radius.peekFloat()),
+                    parseColor(g.color.peek()))) {
+                p.setImageFilter(glow);
+            }
         } else if (effect instanceof ColorOverlay) {
             ColorOverlay c = (ColorOverlay) effect;
-            p.setColorFilter(ColorFilter.makeBlend(parseColor(c.color.peek()), BlendMode.SRC_IN));
+            try (ColorFilter overlay = ColorFilter.makeBlend(parseColor(c.color.peek()), BlendMode.SRC_IN)) {
+                p.setColorFilter(overlay);
+            }
         } else if (effect instanceof MultiEffect && Boolean.TRUE.equals(((MultiEffect) effect).shadowEnabled.peek())) {
             // A MultiEffect used as layer.effect for its drop shadow (MD3 SideSheet casts
             // a shadow to its left over the page). Same shadow knobs as drawMultiEffect.
             MultiEffect me = (MultiEffect) effect;
             int sc = applyAlpha(parseColor(me.shadowColor.peek()), (float) me.shadowOpacity.peekDouble());
             float sg = sigma(me.shadowBlur.peekFloat() * 32f); // Qt blur is 0..1
-            p.setImageFilter(ImageFilter.makeDropShadow(
-                me.shadowHorizontalOffset.peekFloat(), me.shadowVerticalOffset.peekFloat(), sg, sg, sc));
+            try (ImageFilter shadow = ImageFilter.makeDropShadow(
+                    me.shadowHorizontalOffset.peekFloat(), me.shadowVerticalOffset.peekFloat(), sg, sg, sc)) {
+                p.setImageFilter(shadow);
+            }
         } else {
             p.close();
             return null;
