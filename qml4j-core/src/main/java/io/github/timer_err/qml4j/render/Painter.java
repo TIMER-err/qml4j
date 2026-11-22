@@ -751,7 +751,8 @@ public final class Painter {
             // New source: keep showing the old image (no blank flash) and decode the new
             // one off the render thread; adopt it below once ready.
             long gen = node.startDecode(src);
-            ImageLoader.decode(node, src, gen, renderer.resources(), renderer.networkResourcePolicy());
+            ImageLoader.decode(node, src, gen, renderer.resources(),
+                    renderer.networkResourcePolicy(), renderer.decodedImages());
         }
         node.adoptDecode();
         if (node.skiaImage == null) return;

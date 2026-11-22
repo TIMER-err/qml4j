@@ -47,10 +47,17 @@ final class ImageLoader {
     // Load (local or remote) AND decode the source off the render thread into a raster
     // image the render thread just adopts. `gen` guards a superseded source: if the node's
     // decodeGen moved on (a newer source, or the item was released) the result is dropped.
+    // A cached decode of the same source and size is published at once, without I/O.
     static void decode(Image node, String src, long gen, ResourceLoader resources,
-                       NetworkResourcePolicy networkPolicy) {
+                       NetworkResourcePolicy networkPolicy, DecodedImageCache cache) {
         int sourceWidth = node.sourceSize.width.peek().intValue();
         int sourceHeight = node.sourceSize.height.peek().intValue();
+        String key = DecodedImageCache.key(src, sourceWidth, sourceHeight);
+        io.github.humbleui.skija.Image cached = cache.copy(key);
+        if (cached != null) {
+            node.publishDecode(gen, cached, cached.getWidth(), cached.getHeight());
+            return;
+        }
         FutureTask<Void> task = new FutureTask<Void>(() -> {
             if (!node.isDecodeCurrent(gen)) return null;
             byte[] bytes = null;
@@ -68,6 +75,7 @@ final class ImageLoader {
                     img = decodeRaster(bytes, sourceWidth, sourceHeight);
                     w = img.getWidth();
                     h = img.getHeight();
+                    cache.put(key, img);
                 } catch (Throwable t) {
                     img = null;
                 }

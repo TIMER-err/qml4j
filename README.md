@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://jitpack.io/#TIMER-err/qml4j/v0.2.42"><img src="https://jitpack.io/v/TIMER-err/qml4j.svg" alt="JitPack"></a>
+  <a href="https://jitpack.io/#TIMER-err/qml4j/v0.2.43"><img src="https://jitpack.io/v/TIMER-err/qml4j.svg" alt="JitPack"></a>
   <img src="https://img.shields.io/badge/Java-8%2B-7C6CF0" alt="Java 8+">
   <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
 </p>
@@ -65,7 +65,7 @@ Or run a whole QML project from disk, quickshell-style — point the desktop hos
 
 ## Install
 
-`qml4j-core` is distributed through JitPack as `com.github.TIMER-err.qml4j:qml4j-core:v0.2.42` (Git tag `v0.2.42`). Use the exact tag, including its `v` prefix. Other dependencies, including Skija, remain on Maven Central.
+`qml4j-core` is distributed through JitPack as `com.github.TIMER-err.qml4j:qml4j-core:v0.2.43` (Git tag `v0.2.43`). Use the exact tag, including its `v` prefix. Other dependencies, including Skija, remain on Maven Central.
 
 Maven:
 
@@ -81,7 +81,7 @@ Maven:
 <dependency>
     <groupId>com.github.TIMER-err.qml4j</groupId>
     <artifactId>qml4j-core</artifactId>
-    <version>v0.2.42</version>
+    <version>v0.2.43</version>
 </dependency>
 <!-- Skija is a `provided` dependency of the engine; add the native bundle for your platform. -->
 <dependency>
@@ -114,7 +114,7 @@ Module dependencies (`build.gradle.kts`):
 
 ```kotlin
 dependencies {
-    implementation("com.github.TIMER-err.qml4j:qml4j-core:v0.2.42")
+    implementation("com.github.TIMER-err.qml4j:qml4j-core:v0.2.43")
     // pick your platform: skija-linux-x64 / skija-windows-x64 / skija-macos-x64 / skija-macos-arm64
     runtimeOnly("io.github.humbleui:skija-linux-x64:0.143.17")
 }
@@ -122,7 +122,7 @@ dependencies {
 
 The engine keeps Skija `provided` so you choose the platform-native artifact yourself; it transitively pulls in the ANTLR runtime, Rhino, ASM and ICU4J. Java 8+.
 
-Source builds with `mvn install` still use `io.github.timer-err:qml4j-core:0.2.42`. These local artifacts do not replace the JitPack coordinates above.
+Source builds with `mvn install` still use `io.github.timer-err:qml4j-core:0.2.43`. These local artifacts do not replace the JitPack coordinates above.
 
 ## Text wrapping
 
@@ -198,7 +198,7 @@ qml4j aims to be a fully native-Java path from QML source to pixels — a drop-i
 </p>
 
 <p align="center">
-  <a href="https://jitpack.io/#TIMER-err/qml4j/v0.2.42"><img src="https://jitpack.io/v/TIMER-err/qml4j.svg" alt="JitPack"></a>
+  <a href="https://jitpack.io/#TIMER-err/qml4j/v0.2.43"><img src="https://jitpack.io/v/TIMER-err/qml4j.svg" alt="JitPack"></a>
   <img src="https://img.shields.io/badge/desktop-Linux%20%E2%80%A2%20Windows-2BD46E" alt="Desktop">
   <img src="https://img.shields.io/badge/Android-D8%20%E2%86%92%20DEX-A4C639" alt="Android">
 </p>
@@ -335,6 +335,7 @@ The engine is built to sit inside a host render loop that calls `renderFrame` ev
 - **Inactive `Loader`s unload.** Replacing or unloading content disposes the old subtree and releases its bindings and native images. `Repeater` disposal disconnects external model signals and disposes its delegates.
 - **Declared objects follow their owner.** Disposal also unbinds owned `ShapePath`, gradient and gradient-stop properties, including theme subscriptions. Borrowed objects remain intact. Disposed `Connections` disconnect from external targets.
 - **Temporary native references are closed.** Rendering closes temporary filter wrappers after Paint retains its own reference.
+- **Decoded images are reused.** Each renderer keeps a 16 MiB LRU of downscaled `Image` results keyed by source and `sourceSize`. A recycled or re-shown delegate adopts its image in the same frame, without loading or decoding the source again. Entries above 2 MiB are not kept, and changing the resource loader or network policy clears the cache.
 - **`Canvas` `onPaint` is cached.** Each `Canvas` renders into an offscreen surface only when dirty (`requestPaint` / resize) and blits the cache otherwise, so an animated canvas runs its JS at its own fps and a static one runs once. (GPU-backed offscreen on the GL backend; the blit is snapped to integer device pixels for sharpness.)
 
 Net effect on the desktop GL host (uncapped, `QML4J_VSYNC=false`): static pages run 1000–2000fps, the component-heavy "Core" page ~400–500fps; pages with a full-screen animated background are bound by that canvas (~60fps). With vsync on (default) everything is a smooth 60.

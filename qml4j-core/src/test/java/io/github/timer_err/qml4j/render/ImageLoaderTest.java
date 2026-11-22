@@ -190,6 +190,93 @@ class ImageLoaderTest {
         }
     }
 
+    @Test
+    void recycledRowsReuseTheDecodedCoverAndEachItemOwnsItsImage() throws Exception {
+        byte[] blue = solidImage(0xFF3366CC);
+        AtomicInteger loads = new AtomicInteger();
+        QmlView view = QmlView.withStockTypes(new QmlEngine()).resources(source -> {
+            loads.incrementAndGet();
+            return blue;
+        });
+        var root = view.load("Item { width: 16; height: 8;"
+                + " Image { objectName: \"first\"; width: 8; height: 8; source: \"cover\" }"
+                + " Image { objectName: \"second\"; x: 8; width: 8; height: 8 } }");
+        var first = (io.github.timer_err.qml4j.render.items.core.Image) view.findByObjectName("first");
+        var second = (io.github.timer_err.qml4j.render.items.core.Image) view.findByObjectName("second");
+        try (Surface surface = Surface.makeRasterN32Premul(16, 8);
+             Bitmap pixels = new Bitmap()) {
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            do {
+                view.renderer().render(surface.getCanvas(), root);
+                if (first.status.peek().intValue() == 1) break;
+                Thread.sleep(5);
+            } while (System.nanoTime() < deadline);
+            assertEquals(1, first.status.peek().intValue());
+
+            // A row recycled onto the same cover adopts it in the same frame, without I/O.
+            second.source.set("cover");
+            view.renderer().render(surface.getCanvas(), root);
+            assertEquals(1, second.status.peek().intValue());
+            assertEquals(1, loads.get(), "the cover must be loaded and decoded once");
+
+            // Releasing one row must not close the image another row still draws.
+            first.source.set("");
+            view.renderer().render(surface.getCanvas(), root);
+            assertFalse(second.skiaImage.isClosed());
+            pixels.allocN32Pixels(16, 8);
+            assertTrue(surface.readPixels(pixels, 0, 0));
+            assertEquals(0xFF3366CC, pixels.getColor(12, 4));
+        } finally {
+            view.dispose();
+        }
+
+        // Another view resolves the same source through its own loader.
+        AtomicInteger otherLoads = new AtomicInteger();
+        byte[] green = solidImage(0xFF00CC66);
+        QmlView other = QmlView.withStockTypes(new QmlEngine()).resources(source -> {
+            otherLoads.incrementAndGet();
+            return green;
+        });
+        var node = (io.github.timer_err.qml4j.render.items.core.Image) other.load(
+                "Image { width: 8; height: 8; source: \"cover\" }");
+        try (Surface surface = Surface.makeRasterN32Premul(8, 8);
+             Bitmap pixels = new Bitmap()) {
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            do {
+                other.renderer().render(surface.getCanvas(), node);
+                if (node.status.peek().intValue() == 1) break;
+                Thread.sleep(5);
+            } while (System.nanoTime() < deadline);
+            other.renderer().render(surface.getCanvas(), node);
+            assertEquals(1, otherLoads.get());
+            pixels.allocN32Pixels(8, 8);
+            assertTrue(surface.readPixels(pixels, 0, 0));
+            assertEquals(0xFF00CC66, pixels.getColor(4, 4));
+        } finally {
+            other.dispose();
+        }
+    }
+
+    @Test
+    void decodedImageCacheStaysWithinItsBudget() {
+        DecodedImageCache cache = new DecodedImageCache();
+        int side = 256;
+        int count = (int) (DecodedImageCache.BUDGET_BYTES / (4L * side * side)) + 8;
+        try (Surface surface = Surface.makeRasterN32Premul(side, side);
+             Image image = surface.makeImageSnapshot()) {
+            for (int i = 0; i < count; i++) cache.put(DecodedImageCache.key("row/" + i, 0, 0), image);
+            assertTrue(cache.bytes() <= DecodedImageCache.BUDGET_BYTES, "cached " + cache.bytes());
+            assertNull(cache.copy(DecodedImageCache.key("row/0", 0, 0)), "the oldest row is evicted");
+            try (Image newest = cache.copy(DecodedImageCache.key("row/" + (count - 1), 0, 0))) {
+                assertEquals(side, newest.getWidth());
+            }
+            cache.close();
+            assertEquals(0, cache.bytes());
+            cache.put(DecodedImageCache.key("late", 0, 0), image);
+            assertEquals(0, cache.bytes(), "a decode finishing after dispose is not retained");
+        }
+    }
+
     private static byte[] solidImage(int color) {
         try (Surface surface = Surface.makeRasterN32Premul(1, 1)) {
             surface.getCanvas().clear(color);

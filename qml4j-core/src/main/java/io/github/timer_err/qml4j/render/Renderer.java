@@ -53,13 +53,16 @@ public final class Renderer {
     private final IconResolver icons = new IconResolver(fonts);
     private final TextLayout text = new TextLayout(fonts, icons);
     private final Painter painter = new Painter(this);
+    private final DecodedImageCache decodedImages = new DecodedImageCache();
 
     public void setResourceLoader(ResourceLoader loader) {
         this.resources = loader;
+        decodedImages.clear();
     }
 
     public void setNetworkResourcePolicy(NetworkResourcePolicy policy) {
         this.networkResourcePolicy = policy;
+        decodedImages.clear();
     }
 
     /** Override the UI font (regular + medium) from app-provided bytes; either may be
@@ -88,6 +91,10 @@ public final class Renderer {
 
     NetworkResourcePolicy networkResourcePolicy() {
         return networkResourcePolicy;
+    }
+
+    DecodedImageCache decodedImages() {
+        return decodedImages;
     }
 
     FontResolver fonts() {
@@ -1153,6 +1160,7 @@ public final class Renderer {
             paint = null;
         }
         painter.dispose();   // close cached native TextLine handles
+        decodedImages.close();
         text.dispose();
         fonts.close();
     }
